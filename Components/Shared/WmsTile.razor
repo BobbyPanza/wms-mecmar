@@ -1,0 +1,31 @@
+@inject NavigationManager Nav
+
+<MudPaper Class="wms-tile pa-3 d-flex flex-column align-center justify-center"
+          Style="@($"background:#1e1e1e;border:1px solid {TileColor}33;{(Wide ? "width:100%;" : "")}")"
+          Elevation="3"
+          @onclick="() => Nav.NavigateTo(Route)">
+
+    <div style="position:relative;display:inline-block;">
+        <MudIcon Icon="@Icon" Style="@($"font-size:2.5rem;color:{TileColor};")" Class="wms-tile-icon" />
+        @if (Badge is not null)
+        {
+            <span style="position:absolute;top:-6px;right:-8px;background:#F44336;color:#fff;border-radius:50%;min-width:18px;height:18px;font-size:11px;display:flex;align-items:center;justify-content:center;font-weight:700;padding:0 3px;">
+                @Badge
+            </span>
+        }
+    </div>
+
+    <MudText Class="wms-tile-title text-center" Style="@($"color:{TileColor};")">
+        @Title
+    </MudText>
+
+</MudPaper>
+
+@code {
+    [Parameter, EditorRequired] public string Icon      { get; set; } = "";
+    [Parameter, EditorRequired] public string Title     { get; set; } = "";
+    [Parameter, EditorRequired] public string TileColor { get; set; } = "#5B9BD5";
+    [Parameter, EditorRequired] public string Route     { get; set; } = "/";
+    [Parameter] public string? Badge { get; set; }
+    [Parameter] public bool Wide { get; set; }
+}

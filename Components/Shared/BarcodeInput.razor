@@ -1,0 +1,51 @@
+@* Componente barcode: auto-submit su Enter (keyboard wedge) + digitazione manuale *@
+
+<MudTextField @ref="_field"
+              @bind-Value="_value"
+              Label="@Label"
+              Placeholder="@Placeholder"
+              Adornment="Adornment.Start"
+              AdornmentIcon="@Icons.Material.Filled.QrCodeScanner"
+              AdornmentColor="Color.Primary"
+              Variant="Variant.Outlined"
+              FullWidth="true"
+              Clearable="true"
+              Disabled="@Disabled"
+              Class="wms-barcode-field"
+              OnKeyDown="OnKeyDown"
+              Immediate="true"
+              AutoFocus="@AutoFocus"
+              InputType="InputType.Text" />
+
+@code {
+    [Parameter] public string Label { get; set; } = "Scansiona o digita codice";
+    [Parameter] public string Placeholder { get; set; } = "";
+    [Parameter] public bool Disabled { get; set; }
+    [Parameter] public bool AutoFocus { get; set; } = true;
+    [Parameter] public EventCallback<string> OnCodeScanned { get; set; }
+
+    private MudTextField<string>? _field;
+    private string _value = "";
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_value))
+        {
+            var code = _value.Trim().ToUpper();
+            _value = "";
+            await OnCodeScanned.InvokeAsync(code);
+        }
+    }
+
+    public async Task FocusAsync()
+    {
+        if (_field is not null)
+            await _field.FocusAsync();
+    }
+
+    public void Clear()
+    {
+        _value = "";
+        StateHasChanged();
+    }
+}

@@ -1,0 +1,28 @@
+# Build output
+bin/
+obj/
+
+# appsettings con credenziali — committare solo il template
+appsettings.json
+appsettings.Development.json
+appsettings.*.json
+!appsettings.template.json
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Rider
+.idea/
+
+# Publish output (IIS)
+/publish/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,565 @@
+@page "/production/pick"
+
+@using System.Globalization
+@inject SessionService Session
+@inject ErpService Erp
+@inject ISnackbar Snackbar
+
+<PageTitle>Prelievo Produzione</PageTitle>
+
+@if (_list is null)
+{
+    @* ─── Step 1: scan bolla ────────────────────────────────────────────────── *@
+    <MudText Typo="Typo.h6" Class="mb-3">Prelievo Produzione</MudText>
+    <MudText Typo="Typo.body2" Style="color:#94A3B8;" Class="mb-4">
+        Scansiona o digita il codice bolla di lavoro.
+    </MudText>
+
+    <BarcodeInput Label="Codice bolla" OnCodeScanned="LoadBolla" AutoFocus="true" />
+
+    @if (_loading)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mt-4" />
+    }
+    @if (_notFound)
+    {
+        <MudAlert Severity="Severity.Warning" Class="mt-3">
+            Bolla <strong>@_lastSearch</strong> non trovata o senza righe.
+        </MudAlert>
+    }
+}
+else if (_confirming)
+{
+    @* ─── Step 3: riepilogo carrello e conferma ─────────────────────────────── *@
+    <div class="d-flex align-center mb-3 gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Size="Size.Small" OnClick="() => _confirming = false" />
+        <MudText Typo="Typo.h6">Conferma prelievi</MudText>
+    </div>
+
+    <MudText Typo="Typo.caption" Style="color:#94A3B8;" Class="mb-2">
+        @_cart.Count articol@(_cart.Count == 1 ? "o" : "i") pronti per il prelievo — verifica le quantità e conferma.
+    </MudText>
+
+    @foreach (var item in _cart)
+    {
+        var row = item.Row;
+        <div class="pa-3 mb-2" style="background:#1e2a40;border-radius:10px;position:relative;">
+            <div style="display:flex;align-items:flex-start;gap:8px;">
+                <div style="min-width:0;flex:1;">
+                    <span style="font-weight:700;font-family:monospace;font-size:.85rem;">@row.PaCod</span>
+                    <ArticleInfoButton ArticleCode="@row.PaCod" />
+                    <div style="color:#94A3B8;font-size:.75rem;word-break:break-word;">@row.PaDsc</div>
+                    <div style="display:flex;gap:6px;margin-top:4px;flex-wrap:wrap;">
+                        <span style="font-size:.72rem;color:@HandlingColor(row.Handling);">@row.Handling</span>
+                        @if (!string.IsNullOrWhiteSpace(row.Ubicazione))
+                        {
+                            <span style="font-size:.72rem;color:#64748B;">📍 @row.Ubicazione</span>
+                        }
+                    </div>
+                </div>
+                <div style="display:flex;align-items:center;gap:4px;flex-shrink:0;">
+                    <MudNumericField T="decimal" Value="item.Qty"
+                                     ValueChanged="v => item.Qty = v"
+                                     Label="@row.PaUdm" Variant="Variant.Outlined"
+                                     Min="0.001m" Step="0.001m" Culture="@CultureInfo.CurrentCulture"
+                                     Style="width:100px;" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                   Size="Size.Small" Color="Color.Error"
+                                   OnClick="() => RemoveFromCart(item)" />
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (_saving)
+    {
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="my-3" />
+        <MudText Typo="Typo.caption" Style="color:#94A3B8;text-align:center;" Class="d-block mb-3">
+            Registrazione @_saveProgress/@_cart.Count...
+        </MudText>
+    }
+
+    <div style="height:80px;"></div>
+
+    @* Sticky bottom ─ esegui *@
+    <div style="position:fixed;bottom:0;left:0;right:0;padding:12px;background:#0f172a;border-top:1px solid #1e2a40;z-index:100;">
+        <MudButton Variant="Variant.Filled" Color="Color.Success" FullWidth="true"
+                   Size="Size.Large" StartIcon="@Icons.Material.Filled.CheckCircle"
+                   OnClick="ExecuteAllPicks"
+                   Disabled="@(_saving || _cart.Count == 0)">
+            @if (_saving)
+            {
+                <MudProgressCircular Size="Size.Small" Indeterminate="true" Class="mr-2" />
+                <span>REGISTRAZIONE @_saveProgress/@_cart.Count...</span>
+            }
+            else
+            {
+                <span>ESEGUI @_cart.Count PRELIEVO@(_cart.Count == 1 ? "" : "I")</span>
+            }
+        </MudButton>
+    </div>
+}
+else
+{
+    @* ─── Step 2: lista prelievo ─────────────────────────────────────────────── *@
+    <div class="d-flex align-center mb-2 gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                       Size="Size.Small" OnClick="Reset" />
+        <div style="min-width:0;flex:1;">
+            <div class="d-flex align-center gap-2 flex-wrap">
+                <MudText Style="font-weight:700;font-family:monospace;">@_list.OlCod</MudText>
+                <MudChip T="string" Size="Size.Small" Color="@StatoColor(_list.Stato)">
+                    @_list.Stato
+                </MudChip>
+            </div>
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">
+                @_list.CoCod — @_list.ComDesc
+            </MudText>
+        </div>
+        <MudText Typo="Typo.caption" Style="color:#94A3B8;white-space:nowrap;">
+            @_list.RigheEvase/@_list.TotaleRighe
+        </MudText>
+    </div>
+
+    <MudProgressLinear
+        Value="@(_list.TotaleRighe > 0 ? (double)_list.RigheEvase / _list.TotaleRighe * 100 : 0)"
+        Color="Color.Primary" Rounded="true" Size="Size.Small" Class="mb-3" />
+
+    <div class="mb-2">
+        <BarcodeInput Label="Scan articolo (aggiunge al carrello)" OnCodeScanned="OnDirectScan" />
+    </div>
+
+    <div class="d-flex align-center justify-space-between mb-2">
+        <MudCheckBox @bind-Value="_onlyPending" Label="Solo da prelevare"
+                     Size="Size.Small" Color="Color.Primary" />
+        <MudText Typo="Typo.caption" Style="color:#64748B;">
+            @VisibleCount() righe
+        </MudText>
+    </div>
+
+    <div style="padding-bottom:@(_cart.Any() ? "80px" : "16px");">
+
+        <MudExpansionPanels MultiExpansion="true">
+            @foreach (var group in _list.PerHandling)
+            {
+                var visible = _onlyPending
+                    ? group.Where(r => r.Status != PickStatus.Completed).ToList()
+                    : group.ToList();
+                if (!visible.Any()) continue;
+
+                var evase  = group.Count(r => r.Status == PickStatus.Completed);
+                var totGrp = group.Count();
+                var key    = group.Key;
+                if (!_expanded.ContainsKey(key)) _expanded[key] = true;
+
+                <MudExpansionPanel IsExpanded="@_expanded[key]"
+                                   IsExpandedChanged="@((bool v) => _expanded[key] = v)"
+                                   Class="mb-1">
+                    <TitleContent>
+                        <div class="d-flex align-center justify-space-between" style="width:100%;">
+                            <div class="d-flex align-center gap-2">
+                                <MudIcon Icon="@HandlingIcon(group.Key)" Size="Size.Small"
+                                         Style="@($"color:{HandlingColor(group.Key)}")" />
+                                <MudText Style="font-weight:600;">@group.Key</MudText>
+                            </div>
+                            <div class="d-flex align-center gap-2">
+                                <MudText Typo="Typo.caption" Style="color:#94A3B8;">@evase/@totGrp</MudText>
+                                @if (evase == totGrp)
+                                {
+                                    <MudIcon Icon="@Icons.Material.Filled.CheckCircle"
+                                             Size="Size.Small" Color="Color.Success" />
+                                }
+                            </div>
+                        </div>
+                    </TitleContent>
+                    <ChildContent>
+                        @foreach (var row in visible)
+                        {
+                            var inCart   = _cart.FirstOrDefault(c => c.Row.PaCod == row.PaCod);
+                            var hasCart  = inCart != null;
+                            <div class="pa-3 mb-1"
+                                 style="@PickRowStyle(row.Status, hasCart)"
+                                 @onclick="() => SelectRow(row)">
+                                <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                                    <div style="min-width:0;flex:1;">
+                                        <span style="font-weight:700;font-family:monospace;font-size:.85rem;">@row.PaCod</span>
+                                        <div style="color:#94A3B8;font-size:.75rem;word-break:break-word;">@row.PaDsc</div>
+                                        @if (!string.IsNullOrWhiteSpace(row.Ubicazione))
+                                        {
+                                            <div style="color:#64748B;font-size:.72rem;">
+                                                📍 @row.Ubicazione
+                                                @if (row.Giacenza > 0)
+                                                {
+                                                    <span> · @QtyFmt(row.Giacenza) @row.PaUdm</span>
+                                                }
+                                            </div>
+                                        }
+                                    </div>
+                                    <div style="text-align:right;white-space:nowrap;flex-shrink:0;">
+                                        <div style="font-weight:700;font-size:.9rem;">
+                                            @QtyFmt(row.QtaPrelevata) / @QtyFmt(row.QtaDaPrelevare)
+                                        </div>
+                                        @if (hasCart)
+                                        {
+                                            <div style="color:#4ADE80;font-size:.72rem;font-weight:700;">
+                                                🛒 @QtyFmt(inCart!.Qty)
+                                            </div>
+                                        }
+                                        else if (row.QtaResidua > 0)
+                                        {
+                                            <div style="color:#F59E0B;font-size:.72rem;">res. @QtyFmt(row.QtaResidua)</div>
+                                        }
+                                        <span style="font-size:.72rem;font-weight:600;color:@StatusHtmlColor(row.Status);">
+                                            @StatusLabel(row.Status)
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        }
+                    </ChildContent>
+                </MudExpansionPanel>
+            }
+        </MudExpansionPanels>
+
+        @if (_list.TutteEvase)
+        {
+            <MudAlert Severity="Severity.Success" Class="mt-3">
+                Tutti i prelievi della bolla <strong>@_list.OlCod</strong> risultano evasi.
+            </MudAlert>
+        }
+    </div>
+
+    @* Panel bottom: edit qty riga selezionata *@
+    @if (_editRow != null)
+    {
+        <div style="position:fixed;bottom:0;left:0;right:0;padding:12px 12px 20px;background:#1e2a40;border-top:2px solid #334155;z-index:100;box-shadow:0 -4px 20px rgba(0,0,0,.5);">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <div>
+                    <span style="font-weight:700;font-family:monospace;">@_editRow.PaCod</span>
+                    <span style="color:#94A3B8;font-size:.8rem;margin-left:6px;">res. @QtyFmt(_editRow.QtaResidua) @_editRow.PaUdm</span>
+                </div>
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                               OnClick="() => _editRow = null" />
+            </div>
+            <div style="display:flex;gap:8px;align-items:flex-end;">
+                <MudNumericField @bind-Value="_editQty"
+                                 Label="@($"Quantità ({_editRow.PaUdm})")"
+                                 Variant="Variant.Outlined"
+                                 Min="0.001m" Step="1m"
+                                 Style="flex:1;"
+                                 AutoFocus="true" />
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           Style="height:56px;padding:0 20px;"
+                           OnClick="AddToCart">
+                    + Aggiungi
+                </MudButton>
+            </div>
+        </div>
+    }
+    else if (_cart.Any())
+    {
+        @* Cart bar sticky *@
+        <div style="position:fixed;bottom:0;left:0;right:0;padding:10px 12px;background:#1e293b;border-top:1px solid #334155;z-index:100;display:flex;align-items:center;gap:10px;">
+            <div style="flex:1;">
+                <div style="font-weight:700;color:#4ADE80;">🛒 @_cart.Count articolo/i nel carrello</div>
+                <div style="font-size:.75rem;color:#94A3B8;">Tocca CONFERMA per registrare</div>
+            </div>
+            <MudButton Variant="Variant.Filled" Color="Color.Success"
+                       OnClick="() => _confirming = true">
+                CONFERMA
+            </MudButton>
+        </div>
+    }
+}
+
+@code {
+    // ─── State ───────────────────────────────────────────────────────────────
+    private ProductionPickListDto?    _list;
+    private bool   _loading;
+    private bool   _notFound;
+    private bool   _onlyPending  = true;
+    private string  _lastSearch  = "";
+    private Dictionary<string, bool> _expanded = new();
+
+    // Cart
+    private List<CartItem> _cart = new();
+    private bool   _confirming;
+    private bool   _saving;
+    private int    _saveProgress;
+
+    // Edit panel
+    private ProductionPickRowDto? _editRow;
+    private decimal               _editQty;
+
+    private class CartItem
+    {
+        public ProductionPickRowDto Row { get; init; } = null!;
+        public decimal Qty { get; set; }
+    }
+    private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+    protected override void OnInitialized()
+    {
+        Session.SetPageTitle("Prelievo Produzione");
+    }
+
+    // ─── Bolla ───────────────────────────────────────────────────────────────
+
+    private async Task LoadBolla(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code)) return;
+        _lastSearch = code.Trim().ToUpper();
+        _notFound   = false;
+        _loading    = true;
+        StateHasChanged();
+
+        try
+        {
+            _list = await Erp.GetProductionPickListAsync(_lastSearch);
+            if (_list is null)
+            {
+                _notFound = true;
+                Snackbar.Add($"Bolla {_lastSearch} non trovata", Severity.Warning);
+            }
+            else
+            {
+                Session.SetPrintContext("PICK", new Dictionary<string, string>
+                {
+                    ["OLCOD"] = _list.OlCod,
+                    ["COCOD"] = _list.CoCod
+                });
+            }
+        }
+        catch (Exception ex) { Snackbar.Add($"Errore: {ex.Message}", Severity.Error); }
+        finally { _loading = false; }
+    }
+
+    private void Reset()
+    {
+        _list = null;
+        _notFound = false;
+        _expanded.Clear();
+        _cart.Clear();
+        _editRow = null;
+        _confirming = false;
+        Session.ClearPrintContext();
+    }
+
+    // ─── Selezione riga e carrello ────────────────────────────────────────────
+
+    private void SelectRow(ProductionPickRowDto row)
+    {
+        if (row.Status == PickStatus.Completed) return;
+
+        var existing = _cart.FirstOrDefault(c => c.Row.PaCod == row.PaCod);
+        if (existing != null)
+        {
+            // Già nel carrello: riapri per modifica
+            _editRow = row;
+            _editQty = existing.Qty;
+        }
+        else
+        {
+            _editRow = row;
+            _editQty = row.QtaResidua;
+        }
+    }
+
+    private void OnDirectScan(string code)
+    {
+        if (_list is null || string.IsNullOrWhiteSpace(code)) return;
+        var row = _list.Rows.FirstOrDefault(r =>
+            string.Equals(r.PaCod.Trim(), code.Trim(), StringComparison.OrdinalIgnoreCase)
+            && r.Status != PickStatus.Completed);
+        if (row is null)
+        {
+            Snackbar.Add($"Articolo {code} non trovato o già evaso", Severity.Warning);
+            return;
+        }
+        var existing = _cart.FirstOrDefault(c => c.Row.PaCod == row.PaCod);
+        if (existing != null)
+        {
+            Snackbar.Add($"{row.PaCod} già nel carrello ({existing.Qty} {row.PaUdm})", Severity.Info);
+            _editRow = row;
+            _editQty = existing.Qty;
+        }
+        else
+        {
+            _cart.Add(new CartItem { Row = row, Qty = row.QtaResidua });
+            Snackbar.Add($"{row.PaCod} aggiunto al carrello ✓", Severity.Success);
+        }
+    }
+
+    private void AddToCart()
+    {
+        if (_editRow is null || _editQty <= 0) return;
+        var existing = _cart.FirstOrDefault(c => c.Row.PaCod == _editRow.PaCod);
+        if (existing != null)
+            existing.Qty = _editQty;
+        else
+            _cart.Add(new CartItem { Row = _editRow, Qty = _editQty });
+
+        Snackbar.Add($"{_editRow.PaCod} nel carrello ({_editQty} {_editRow.PaUdm})", Severity.Success);
+        _editRow = null;
+    }
+
+    private void RemoveFromCart(CartItem item)
+    {
+        _cart.Remove(item);
+    }
+
+    // ─── Esecuzione prelievi ──────────────────────────────────────────────────
+
+    private async Task ExecuteAllPicks()
+    {
+        if (_list is null || _cart.Count == 0) return;
+        if (!Session.NodeReady)
+        {
+            Snackbar.Add("Nodo dispositivo non inizializzato — ricarica la pagina", Severity.Error);
+            return;
+        }
+
+        _saving = true;
+        _saveProgress = 0;
+        var errors = new List<string>();
+        var itemsToProcess = _cart.ToList();
+        int idSes = -1;
+
+        try
+        {
+            // Apri sessione unica per tutto il batch
+            var (sesId, sesErr) = await Erp.OpenPickSessionAsync(
+                _list.OlCod, Session.OperatorCode!, Session.NodeId);
+            if (sesId <= 0)
+            {
+                Snackbar.Add($"Errore apertura sessione: {sesErr}", Severity.Error);
+                return;
+            }
+            idSes = sesId;
+
+            // Righe
+            foreach (var item in itemsToProcess)
+            {
+                try
+                {
+                    var (ok, _, msg) = await Erp.InsertPickLineAsync(
+                        olcod:        _list.OlCod,
+                        pacod:        item.Row.PaCod,
+                        padsc:        item.Row.PaDsc,
+                        paudm:        item.Row.PaUdm,
+                        qty:          item.Qty,
+                        operatorCode: Session.OperatorCode!,
+                        nodeId:       Session.NodeId,
+                        idSes:        idSes);
+
+                    if (ok)
+                        _cart.Remove(item);
+                    else
+                        errors.Add($"{item.Row.PaCod}: {msg}");
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{item.Row.PaCod}: {ex.Message}");
+                }
+                _saveProgress++;
+                StateHasChanged();
+            }
+
+            // Chiudi sessione (anche se ci sono errori parziali)
+            await Erp.ClosePickSessionAsync(idSes);
+
+            // Ricarica lista
+            _list = await Erp.GetProductionPickListAsync(_list.OlCod);
+
+            if (errors.Count == 0)
+            {
+                Snackbar.Add($"✓ {itemsToProcess.Count} prelievo/i registrato/i", Severity.Success);
+                _confirming = false;
+            }
+            else
+            {
+                foreach (var e in errors)
+                    Snackbar.Add(e, Severity.Error);
+                Snackbar.Add($"{itemsToProcess.Count - errors.Count}/{itemsToProcess.Count} registrati", Severity.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore: {ex.Message}", Severity.Error);
+            // Prova a chiudere la sessione comunque
+            if (idSes > 0) _ = Erp.ClosePickSessionAsync(idSes);
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    private int VisibleCount() => _onlyPending
+        ? _list!.Rows.Count(r => r.Status != PickStatus.Completed)
+        : _list!.TotaleRighe;
+
+    private static Color StatoColor(string stato) => stato switch
+    {
+        "Aperta"   => Color.Info,
+        "In corso" => Color.Warning,
+        _          => Color.Default
+    };
+
+    private static string PickRowStyle(PickStatus s, bool inCart) => s switch
+    {
+        PickStatus.Completed => "background:#1a2535;border-radius:8px;opacity:.45;cursor:default;",
+        PickStatus.Partial   => inCart
+            ? "background:#1a3020;border-radius:8px;border-left:3px solid #4ADE80;cursor:pointer;"
+            : "background:#242e42;border-radius:8px;border-left:3px solid #F59E0B;cursor:pointer;",
+        _                    => inCart
+            ? "background:#1a3020;border-radius:8px;border-left:3px solid #4ADE80;cursor:pointer;"
+            : "background:#242e42;border-radius:8px;cursor:pointer;"
+    };
+
+    private static string StatusHtmlColor(PickStatus s) => s switch
+    {
+        PickStatus.Completed => "#4FAB5B",
+        PickStatus.Partial   => "#F59E0B",
+        _                    => "#94A3B8"
+    };
+
+    private static string StatusLabel(PickStatus s) => s switch
+    {
+        PickStatus.Completed => "✓ OK",
+        PickStatus.Partial   => "PARZ.",
+        _                    => "DA FARE"
+    };
+
+    private static string HandlingIcon(string h) => h switch
+    {
+        "Piccoli"              => Icons.Material.Filled.Inventory2,
+        "Grandi"               => Icons.Material.Filled.Inventory,
+        "Carpenteria"          => Icons.Material.Filled.Construction,
+        "Carpenteria Standard" => Icons.Material.Filled.Construction,
+        "Carpenteria Macchine" => Icons.Material.Filled.PrecisionManufacturing,
+        "Trasmissioni"         => Icons.Material.Filled.Settings,
+        "Postazione"           => Icons.Material.Filled.WorkspacePremium,
+        "Conto Lav."           => Icons.Material.Filled.SwapHoriz,
+        "Carico"               => Icons.Material.Filled.LocalShipping,
+        "Smontato"             => Icons.Material.Filled.Build,
+        _                      => Icons.Material.Filled.Category
+    };
+
+    private static string HandlingColor(string h) => h switch
+    {
+        "Piccoli"              => "#60A5FA",
+        "Grandi"               => "#A78BFA",
+        "Carpenteria"          => "#F97316",
+        "Carpenteria Standard" => "#F97316",
+        "Carpenteria Macchine" => "#FB923C",
+        "Trasmissioni"         => "#34D399",
+        "Postazione"           => "#FBBF24",
+        "Conto Lav."           => "#94A3B8",
+        "Carico"               => "#38BDF8",
+        "Smontato"             => "#F87171",
+        _                      => "#94A3B8"
+    };
+}

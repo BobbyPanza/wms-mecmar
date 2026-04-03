@@ -1,0 +1,240 @@
+@page "/query"
+
+@inject SessionService Session
+@inject MockWmsService Wms
+@inject ErpService Erp
+@inject ISnackbar Snackbar
+
+<PageTitle>Interrogazione</PageTitle>
+
+<BarcodeInput Label="Articolo o locazione"
+              Placeholder="Es. BRU-2000 oppure A-01-01"
+              OnCodeScanned="OnCodeScanned"
+              AutoFocus="true" />
+
+@if (_loading)
+{
+    <div class="d-flex justify-center mt-6">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+    </div>
+}
+else if (_notFound)
+{
+    <MudAlert Severity="Severity.Warning" Class="mt-3">
+        Nessun articolo né locazione trovati per <strong>@_lastQuery</strong>.
+    </MudAlert>
+}
+
+@* ─── Risultato: ARTICOLO ─────────────────────────────────────────────────── *@
+@if (_article is not null)
+{
+    <MudChip T="string" Size="Size.Small" Color="Color.Info" Icon="@Icons.Material.Filled.Inventory2" Class="mt-2 mb-1">
+        Articolo trovato
+    </MudChip>
+
+    <MudPaper Elevation="3" Class="pa-3" Style="border-radius:12px;">
+        <div class="d-flex gap-3 align-start">
+            <div class="wms-article-image">
+                <MudIcon Icon="@Icons.Material.Filled.Inventory2" Style="font-size:52px;color:#5B9BD5;" />
+                <MudText Typo="Typo.caption" Style="color:#64748B;margin-top:4px;font-size:0.65rem;">img. articolo</MudText>
+            </div>
+            <div class="flex-grow-1" style="min-width:0;">
+                <div class="d-flex align-center gap-1 mb-1">
+                    <MudChip T="string" Size="Size.Small" Color="Color.Primary" Class="wms-code-chip">
+                        @_article.Code
+                    </MudChip>
+                    <ArticleInfoButton ArticleCode="@_article.Code" />
+                </div>
+                <MudText Typo="Typo.subtitle1" Style="font-weight:700;line-height:1.3;word-break:break-word;">
+                    @_article.Description
+                </MudText>
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;">UM: @_article.UoM</MudText>
+                <div class="d-flex align-center mt-2 gap-2">
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;">Giacenza totale:</MudText>
+                    <StockBadge Quantity="@_article.TotalStock" MinStock="@_article.MinStock"
+                                UoM="@_article.UoM" Size="Size.Medium" />
+                </div>
+            </div>
+        </div>
+    </MudPaper>
+
+    <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" Class="mt-3">
+        <MudTabPanel Text="Locazioni" Icon="@Icons.Material.Filled.LocationOn">
+            @foreach (var loc in _article.Locations)
+            {
+                <MudPaper Elevation="1" Class="pa-3 mb-2" Style="border-radius:8px;background:#1e1e2e;">
+                    <div class="d-flex align-center justify-space-between">
+                        <div>
+                            <div class="d-flex align-center gap-2">
+                                <MudText Style="font-weight:700;font-family:monospace;">
+                                    @loc.WarehouseCode / @loc.LocationCode
+                                </MudText>
+                                @if (loc.IsMainWithdrawal)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Success">PRINCIPALE</MudChip>
+                                }
+                            </div>
+                            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@loc.LocationDesc</MudText>
+                        </div>
+                        <StockBadge Quantity="@loc.Quantity" MinStock="@loc.MinQty"
+                                    UoM="@_article.UoM" Size="Size.Medium" />
+                    </div>
+                    @if (loc.MaxQty > 0)
+                    {
+                        <MudProgressLinear Value="@((double)(loc.Quantity / loc.MaxQty * 100))"
+                                          Color="Color.Primary" Rounded="true" Size="Size.Small" Class="mt-2" />
+                    }
+                </MudPaper>
+            }
+            @if (_article.Locations.Count == 0)
+            {
+                <MudText Class="pa-3" Style="color:#64748B;">Nessuna locazione abbinata.</MudText>
+            }
+        </MudTabPanel>
+        <MudTabPanel Text="Movimenti" Icon="@Icons.Material.Filled.History">
+            @foreach (var mov in _article.RecentMovements)
+            {
+                <MudPaper Elevation="1" Class="pa-2 mb-1" Style="border-radius:6px;background:#1c2333;">
+                    <div class="d-flex align-center justify-space-between">
+                        <div>
+                            <MudText Typo="Typo.body2" Style="font-weight:600;">
+                                @mov.CausalCode — @mov.CausalDesc
+                            </MudText>
+                            <MudText Typo="Typo.caption" Style="color:#94A3B8;">
+                                @mov.Timestamp.ToString("dd/MM/yy HH:mm") · @mov.OperatorCode · @mov.WarehouseCode/@mov.LocationCode
+                            </MudText>
+                        </div>
+                        <MudText Style="@($"font-weight:700;font-size:1.1rem;color:{(mov.Quantity >= 0 ? "#4FAB5B" : "#E05252")}")">
+                            @(mov.Quantity >= 0 ? "+" : "")@mov.Quantity.ToString("N0")
+                        </MudText>
+                    </div>
+                </MudPaper>
+            }
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@* ─── Risultato: LOCAZIONE ───────────────────────────────────────────────── *@
+@if (_location is not null)
+{
+    <MudChip T="string" Size="Size.Small" Color="Color.Success" Icon="@Icons.Material.Filled.LocationOn" Class="mt-2 mb-1">
+        Locazione trovata
+    </MudChip>
+
+    <MudPaper Elevation="3" Class="pa-3" Style="border-radius:12px;background:#1e2d20;">
+        <div class="d-flex align-center gap-3 mb-2">
+            <MudIcon Icon="@Icons.Material.Filled.LocationOn" Style="font-size:2.5rem;color:#4FAB5B;" />
+            <div>
+                <MudText Style="font-family:monospace;font-weight:700;font-size:1.3rem;">
+                    @_location.WarehouseCode / @_location.LocationCode
+                </MudText>
+                <MudText Typo="Typo.body2" Style="color:#94A3B8;">@_location.LocationDesc</MudText>
+            </div>
+        </div>
+        <div class="d-flex gap-2 flex-wrap">
+            <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.Warehouse">@_location.WarehouseDesc</MudChip>
+            @if (_location.IsAcceptance) { <MudChip T="string" Size="Size.Small" Color="Color.Info">TRANSITO</MudChip> }
+            @if (_location.IsFiscal) { <MudChip T="string" Size="Size.Small" Color="Color.Success">FISCALE</MudChip> }
+        </div>
+    </MudPaper>
+
+    <MudTabs Elevation="2" Rounded="true" ApplyEffectsToContainer="true" Class="mt-3">
+        <MudTabPanel Text="@($"Contenuto ({_location.Contents.Count})")" Icon="@Icons.Material.Filled.Inventory">
+            @if (_location.Contents.Count == 0)
+            {
+                <MudAlert Severity="Severity.Info" Class="mt-2">Locazione vuota.</MudAlert>
+            }
+            @foreach (var item in _location.Contents)
+            {
+                <MudPaper Elevation="1" Class="pa-3 mb-2" Style="border-radius:8px;">
+                    <div class="d-flex align-center justify-space-between">
+                        <div>
+                            <div class="d-flex align-center gap-1">
+                                <MudText Style="font-weight:700;font-family:monospace;">@item.ArticleCode</MudText>
+                                <ArticleInfoButton ArticleCode="@item.ArticleCode" />
+                            </div>
+                            <MudText Typo="Typo.body2" Style="color:#94A3B8;word-break:break-word;">@item.ArticleDesc</MudText>
+                        </div>
+                        <StockBadge Quantity="@item.Quantity" MinStock="0" UoM="@item.UoM" Size="Size.Large" />
+                    </div>
+                </MudPaper>
+            }
+        </MudTabPanel>
+        <MudTabPanel Text="Movimenti" Icon="@Icons.Material.Filled.History">
+            @foreach (var mov in _location.RecentMovements)
+            {
+                <MudPaper Elevation="1" Class="pa-2 mb-1" Style="border-radius:6px;background:#1c2333;">
+                    <div class="d-flex align-center justify-space-between">
+                        <div>
+                            <MudText Typo="Typo.body2" Style="font-weight:600;">@mov.CausalCode — @mov.CausalDesc</MudText>
+                            <MudText Typo="Typo.caption" Style="color:#94A3B8;">
+                                @mov.Timestamp.ToString("dd/MM/yy HH:mm") · @mov.OperatorCode · @mov.DocumentRef
+                            </MudText>
+                        </div>
+                        <MudText Style="@($"font-weight:700;font-size:1.1rem;color:{(mov.Quantity >= 0 ? "#4FAB5B" : "#E05252")}")">
+                            @(mov.Quantity >= 0 ? "+" : "")@mov.Quantity.ToString("N0")
+                        </MudText>
+                    </div>
+                </MudPaper>
+            }
+        </MudTabPanel>
+    </MudTabs>
+}
+
+@if (!_loading && !_notFound && _article is null && _location is null)
+{
+    <MudText Class="mt-4 text-center" Style="color:#64748B;">
+        Scansiona un codice articolo o una locazione
+    </MudText>
+}
+
+@code {
+    private ArticleDto? _article;
+    private LocationDto? _location;
+    private bool _loading;
+    private bool _notFound;
+    private string _lastQuery = "";
+
+    protected override void OnInitialized() => Session.SetPageTitle("Interrogazione");
+
+    private async Task OnCodeScanned(string code)
+    {
+        _lastQuery = code;
+        _loading = true;
+        _notFound = false;
+        _article = null;
+        _location = null;
+        StateHasChanged();
+
+        if (Erp.IsConfigured)
+        {
+            try
+            {
+                _article = await Erp.GetArticleAsync(code);
+                if (_article is null)
+                    _location = await Erp.GetLocationAsync(code);
+            }
+            catch (Exception)
+            {
+                Snackbar.Add("Errore connessione DB", Severity.Error);
+            }
+        }
+        else
+        {
+            await Task.Delay(150);
+            _article = Wms.GetArticle(code);
+            if (_article is null)
+                _location = Wms.GetLocation("", code);
+        }
+
+        _notFound = _article is null && _location is null;
+        _loading = false;
+
+        if (_article is not null)
+            Session.SetPrintContext("ARTICLE", new() { ["PACOD"] = _article.Code });
+        else if (_location is not null)
+            Session.SetPrintContext("LOCATION", new() { ["LCCOD"] = _location.LocationCode, ["MGCOD"] = _location.WarehouseCode });
+        else
+            Session.ClearPrintContext();
+    }
+}

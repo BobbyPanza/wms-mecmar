@@ -1,0 +1,348 @@
+@page "/config"
+
+@inject SessionService Session
+@inject LogicService Logic
+@inject ISnackbar Snackbar
+@inject IDialogService DialogService
+
+<PageTitle>Configurazione</PageTitle>
+
+@if (_loading)
+{
+    <div class="d-flex justify-center mt-6">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+    </div>
+}
+else if (_editingTemplate is null)
+{
+    @* ═══════════════════════════════════════════════════════════════════════
+       LISTA TEMPLATE
+       ═══════════════════════════════════════════════════════════════════════ *@
+
+    <div class="d-flex align-center justify-space-between mb-3">
+        <MudText Typo="Typo.h6">Template di stampa</MudText>
+        @if (!Logic.IsConfigured)
+        {
+            <MudChip T="string" Color="Color.Error" Size="Size.Small">DB Logic non configurato</MudChip>
+        }
+    </div>
+
+    @if (!Logic.IsConfigured)
+    {
+        <MudAlert Severity="Severity.Warning">
+            Il database Logic non è configurato. Impostare <code>ConnectionStrings:LogicDatabase</code> in appsettings.
+        </MudAlert>
+    }
+    else
+    {
+        @* Filtro per contesto *@
+        <MudSelect T="string" @bind-Value="_filterContext" Label="Filtra per contesto"
+                   Variant="Variant.Outlined" Class="mb-3" Clearable="true">
+            @foreach (var ctx in _contexts)
+            {
+                <MudSelectItem Value="@ctx">@ctx</MudSelectItem>
+            }
+        </MudSelect>
+
+        @foreach (var t in FilteredTemplates)
+        {
+            <MudPaper Elevation="2" Class="pa-3 mb-2" Style="border-radius:10px;">
+                <div class="d-flex align-start justify-space-between">
+                    <div style="min-width:0;flex:1;">
+                        <div class="d-flex align-center gap-2 flex-wrap">
+                            <MudChip T="string" Size="Size.Small" Color="Color.Primary">@t.Context</MudChip>
+                            <MudText Style="font-weight:700;">@t.Name</MudText>
+                            @if (!t.IsActive)
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Default">INATTIVO</MudChip>
+                            }
+                        </div>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;font-family:monospace;">
+                            @t.ReportName
+                        </MudText>
+                        @if (t.PrinterName is not null)
+                        {
+                            <MudText Typo="Typo.caption" Style="color:#64748B;">
+                                Stampante: @t.PrinterName
+                            </MudText>
+                        }
+                        <MudText Typo="Typo.caption" Style="color:#64748B;">
+                            @t.Params.Count parametro/i
+                        </MudText>
+                    </div>
+                    <div class="d-flex gap-1 ml-2">
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit"
+                                       Size="Size.Small" Color="Color.Primary"
+                                       OnClick="() => StartEdit(t)" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Size="Size.Small" Color="Color.Error"
+                                       OnClick="() => DeleteTemplate(t)" />
+                    </div>
+                </div>
+            </MudPaper>
+        }
+
+        @if (!FilteredTemplates.Any())
+        {
+            <MudAlert Severity="Severity.Info">
+                Nessun template configurato@(string.IsNullOrEmpty(_filterContext) ? "" : $" per il contesto {_filterContext}").
+            </MudAlert>
+        }
+
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                   StartIcon="@Icons.Material.Filled.Add" Class="mt-3"
+                   OnClick="StartNew">
+            NUOVO TEMPLATE
+        </MudButton>
+    }
+}
+else
+{
+    @* ═══════════════════════════════════════════════════════════════════════
+       EDITOR TEMPLATE
+       ═══════════════════════════════════════════════════════════════════════ *@
+
+    <div class="d-flex align-center mb-3 gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                       OnClick="CancelEdit" />
+        <MudText Typo="Typo.h6">
+            @(_editingTemplate.Id == 0 ? "Nuovo template" : $"Modifica — {_editingTemplate.Name}")
+        </MudText>
+    </div>
+
+    @* ─── Dati template ──────────────────────────────────────────────────── *@
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2a40;">
+        <MudText Typo="Typo.subtitle2" Class="mb-2" Style="color:#93C0DC;">Template</MudText>
+
+        <MudSelect T="string" @bind-Value="_editingTemplate.Context" Label="Contesto"
+                   Variant="Variant.Outlined" Class="mb-2">
+            @foreach (var ctx in _contexts)
+            {
+                <MudSelectItem Value="@ctx">@ctx</MudSelectItem>
+            }
+        </MudSelect>
+
+        <MudTextField @bind-Value="_editingTemplate.Name" Label="Nome"
+                      Variant="Variant.Outlined" Class="mb-2" />
+
+        <MudTextField @bind-Value="_editingTemplate.ReportName"
+                      Label="Report (printModelCode o path .rpt)"
+                      Variant="Variant.Outlined" Class="mb-2"
+                      HelperText="Senza .rpt → Printer Manager; con .rpt → Crystal legacy" />
+
+        <MudTextField @bind-Value="_editingTemplate.PrinterName"
+                      Label="Stampante (vuoto = default config)"
+                      Variant="Variant.Outlined" Class="mb-2" />
+
+        <MudSwitch @bind-Value="_editingTemplate.IsActive" Color="Color.Primary" Label="Attivo" />
+    </MudPaper>
+
+    @* ─── Parametri ──────────────────────────────────────────────────────── *@
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2838;">
+        <div class="d-flex align-center justify-space-between mb-2">
+            <MudText Typo="Typo.subtitle2" Style="color:#93C0DC;">Parametri</MudText>
+            <MudIconButton Icon="@Icons.Material.Filled.Add" Size="Size.Small"
+                           Color="Color.Primary" OnClick="AddParam" />
+        </div>
+
+        @if (_editingTemplate.Params.Count == 0)
+        {
+            <MudText Typo="Typo.caption" Style="color:#64748B;">
+                Nessun parametro — il report non richiede input.
+            </MudText>
+        }
+
+        @for (int i = 0; i < _editingTemplate.Params.Count; i++)
+        {
+            var idx = i;
+            var p   = _editingTemplate.Params[idx];
+
+            <MudPaper Class="pa-2 mb-2" Style="border-radius:8px;background:#242e42;">
+                <div class="d-flex align-center gap-1 mb-1">
+                    <MudText Typo="Typo.caption" Style="color:#64748B;">@(idx + 1).</MudText>
+                    <MudSpacer />
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowUpward" Size="Size.Small"
+                                   Disabled="@(idx == 0)"
+                                   OnClick="() => MoveParam(idx, -1)" />
+                    <MudIconButton Icon="@Icons.Material.Filled.ArrowDownward" Size="Size.Small"
+                                   Disabled="@(idx == _editingTemplate.Params.Count - 1)"
+                                   OnClick="() => MoveParam(idx, +1)" />
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small"
+                                   Color="Color.Error" OnClick="() => RemoveParam(idx)" />
+                </div>
+
+                <div class="d-flex gap-2 flex-wrap">
+                    <MudTextField @bind-Value="p.ParamName" Label="Nome parametro Crystal"
+                                  Variant="Variant.Outlined" Style="flex:1;min-width:120px;" />
+                    <MudTextField @bind-Value="p.Label" Label="Etichetta UI"
+                                  Variant="Variant.Outlined" Style="flex:1;min-width:120px;" />
+                </div>
+                <div class="d-flex gap-2 mt-1 flex-wrap align-center">
+                    <MudSelect T="string" @bind-Value="p.AutoFillKey"
+                               Label="Auto-fill da contesto"
+                               Variant="Variant.Outlined" Clearable="true"
+                               Style="flex:1;min-width:140px;">
+                        @foreach (var k in _autoFillKeys)
+                        {
+                            <MudSelectItem Value="@k">@k</MudSelectItem>
+                        }
+                    </MudSelect>
+                    <MudSwitch @bind-Value="p.IsRequired" Color="Color.Warning"
+                               Label="Obbligatorio" Style="white-space:nowrap;" />
+                </div>
+            </MudPaper>
+        }
+    </MudPaper>
+
+    <MudButton Variant="Variant.Filled" Color="Color.Success" FullWidth="true"
+               Size="Size.Large" StartIcon="@Icons.Material.Filled.Save"
+               Disabled="@(_saving || string.IsNullOrWhiteSpace(_editingTemplate.Name) || string.IsNullOrWhiteSpace(_editingTemplate.ReportName))"
+               OnClick="SaveTemplate">
+        @if (_saving) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+        else          { <span>SALVA</span> }
+    </MudButton>
+}
+
+@code {
+    private static readonly string[] _contexts =
+    [
+        "ARTICLE", "LOCATION", "MOVE", "CART",
+        "INVENTORY", "ACCEPTANCE", "ADJUSTMENT", "SHIPPING"
+    ];
+
+    // Chiavi auto-fill disponibili per contesto (union di tutti)
+    private static readonly string[] _autoFillKeys =
+    [
+        "PACOD", "LCCOD", "MGCOD", "ZONE",
+        "MGCOD_SRC", "LCCOD_SRC", "MGCOD_DST", "LCCOD_DST",
+        "QTY", "OPCOD", "DOCRIF", "SUPPLIER"
+    ];
+
+    private List<PrintTemplate> _templates   = [];
+    private PrintTemplate?      _editingTemplate;
+    private string  _filterContext = "";
+    private bool    _loading = true;
+    private bool    _saving;
+
+    private IEnumerable<PrintTemplate> FilteredTemplates =>
+        string.IsNullOrEmpty(_filterContext)
+            ? _templates
+            : _templates.Where(t => t.Context == _filterContext);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Session.SetPageTitle("Configurazione");
+        await LoadTemplates();
+    }
+
+    private async Task LoadTemplates()
+    {
+        _loading = true;
+        if (Logic.IsConfigured)
+        {
+            try { _templates = await Logic.GetAllPrintTemplatesAsync(); }
+            catch (Exception ex) { Snackbar.Add($"Errore caricamento: {ex.Message}", Severity.Error); }
+        }
+        _loading = false;
+    }
+
+    // ─── Editor ───────────────────────────────────────────────────────────────
+
+    private void StartNew()
+    {
+        _editingTemplate = new PrintTemplate
+        {
+            Context  = _contexts[0],
+            IsActive = true
+        };
+    }
+
+    private void StartEdit(PrintTemplate t)
+    {
+        // copia profonda per editare senza toccare la lista
+        _editingTemplate = new PrintTemplate
+        {
+            Id          = t.Id,
+            Context     = t.Context,
+            Name        = t.Name,
+            ReportName  = t.ReportName,
+            PrinterName = t.PrinterName,
+            IsActive    = t.IsActive,
+            Params      = t.Params.Select(p => new PrintTemplateParam
+            {
+                Id          = p.Id,
+                TemplateId  = p.TemplateId,
+                ParamName   = p.ParamName,
+                AutoFillKey = p.AutoFillKey,
+                Label       = p.Label,
+                IsRequired  = p.IsRequired,
+                SortOrder   = p.SortOrder
+            }).ToList()
+        };
+    }
+
+    private void CancelEdit() => _editingTemplate = null;
+
+    private async Task SaveTemplate()
+    {
+        if (_editingTemplate is null) return;
+        _saving = true;
+        try
+        {
+            // aggiorna SortOrder in base all'ordine corrente
+            for (int i = 0; i < _editingTemplate.Params.Count; i++)
+                _editingTemplate.Params[i].SortOrder = i;
+
+            var id = await Logic.UpsertPrintTemplateAsync(_editingTemplate);
+            await Logic.ReplaceParamsAsync(id, _editingTemplate.Params);
+
+            Snackbar.Add("Template salvato", Severity.Success);
+            _editingTemplate = null;
+            await LoadTemplates();
+        }
+        catch (Exception ex) { Snackbar.Add($"Errore salvataggio: {ex.Message}", Severity.Error); }
+        finally { _saving = false; }
+    }
+
+    private async Task DeleteTemplate(PrintTemplate t)
+    {
+        var options = new DialogOptions { MaxWidth = MaxWidth.ExtraSmall };
+        var parameters = new DialogParameters<ConfirmDialog>
+        {
+            { x => x.Message, $"Eliminare \"{t.Name}\"?" }
+        };
+        var dialog = await DialogService.ShowAsync<ConfirmDialog>("Elimina template", parameters, options);
+        var result = await dialog.Result;
+        if (result is null || result.Canceled) return;
+
+        try
+        {
+            await Logic.DeletePrintTemplateAsync(t.Id);
+            Snackbar.Add("Template eliminato", Severity.Success);
+            await LoadTemplates();
+        }
+        catch (Exception ex) { Snackbar.Add($"Errore: {ex.Message}", Severity.Error); }
+    }
+
+    // ─── Parametri ────────────────────────────────────────────────────────────
+
+    private void AddParam()
+    {
+        _editingTemplate!.Params.Add(new PrintTemplateParam
+        {
+            Label     = "",
+            ParamName = "",
+            SortOrder = _editingTemplate.Params.Count
+        });
+    }
+
+    private void RemoveParam(int idx) => _editingTemplate!.Params.RemoveAt(idx);
+
+    private void MoveParam(int idx, int dir)
+    {
+        var list   = _editingTemplate!.Params;
+        var target = idx + dir;
+        if (target < 0 || target >= list.Count) return;
+        (list[idx], list[target]) = (list[target], list[idx]);
+    }
+}

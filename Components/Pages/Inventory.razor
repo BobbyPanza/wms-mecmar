@@ -1,0 +1,674 @@
+@page "/inventory"
+
+@using System.Globalization
+@inject SessionService Session
+@inject MockWmsService Wms
+@inject ErpService Erp
+@inject LogicService Logic
+@inject ISnackbar Snackbar
+
+<PageTitle>Inventario</PageTitle>
+
+@if (_loading)
+{
+    <div class="d-flex justify-center mt-6">
+        <MudProgressCircular Indeterminate="true" Color="Color.Warning" />
+    </div>
+}
+
+@* ═══════════════════════════════════════════════════════════════════════════
+   SCHERMATA 1 — Selezione magazzino / riprendi sessione
+   ═══════════════════════════════════════════════════════════════════════════ *@
+else if (_session is null)
+{
+    <MudText Typo="Typo.h6" Class="mb-3">Avvia sessione inventario</MudText>
+
+    @if (_openSession is not null)
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-3" Icon="@Icons.Material.Filled.Inventory">
+            <MudText Typo="Typo.body2">
+                <strong>Sessione aperta:</strong> @_openSession.WarehouseDesc
+                @(string.IsNullOrEmpty(_openSession.Zone) ? "" : $" — zona {_openSession.Zone}")
+                · @_openSession.StartedAt.ToString("dd/MM HH:mm")
+                · @_openSession.Counts.Count(c => c.IsCounted)/@_openSession.Counts.Count contati
+            </MudText>
+            <div class="d-flex gap-2 mt-2">
+                <MudButton Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
+                           OnClick="ResumeSession">RIPRENDI</MudButton>
+                <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                           OnClick="AbandonSession">Abbandona</MudButton>
+            </div>
+        </MudAlert>
+    }
+
+    <MudSelect T="string" @bind-Value="_selWarehouse"
+               Label="Magazzino" Variant="Variant.Outlined" Class="mb-3">
+        @foreach (var wh in _warehouses)
+        {
+            <MudSelectItem Value="@wh.Code">@wh.Code — @wh.Description</MudSelectItem>
+        }
+    </MudSelect>
+
+    <MudTextField @bind-Value="_selZone"
+                  Label="Prefisso locazione (opzionale)"
+                  Placeholder="Es. A, 01-A — vuoto = tutto il magazzino"
+                  Variant="Variant.Outlined" Class="mb-3" />
+
+    <MudButton Variant="Variant.Filled" Color="Color.Warning" FullWidth="true"
+               Size="Size.Large" StartIcon="@Icons.Material.Filled.Inventory"
+               OnClick="StartSession" Disabled="@(string.IsNullOrEmpty(_selWarehouse) || _loading)">
+        AVVIA INVENTARIO
+    </MudButton>
+}
+
+@* ═══════════════════════════════════════════════════════════════════════════
+   SCHERMATA 2b — Picker locazione (stesso articolo in più posti)
+   ═══════════════════════════════════════════════════════════════════════════ *@
+else if (_locationPicker is not null)
+{
+    <div class="d-flex align-center mb-3 gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                       OnClick="() => _locationPicker = null" />
+        <MudText Typo="Typo.subtitle1" Style="font-weight:700;">
+            @_pickerArticleCode — scegli locazione
+        </MudText>
+    </div>
+
+    <BarcodeInput Label="Scan locazione" OnCodeScanned="OnPickerBarcodeScanned" AutoFocus="true" />
+
+    <MudButton Variant="Variant.Outlined" Color="Color.Warning" FullWidth="true"
+               StartIcon="@Icons.Material.Filled.AddLocation" Class="mb-3"
+               OnClick="AddLocationFromPicker">
+        Aggiungi locazione per @_pickerArticleCode
+    </MudButton>
+
+    @foreach (var row in _locationPicker)
+    {
+        var css = row.Applied    ? "inv-row-counted"
+                : !row.IsCounted ? "inv-row-pending"
+                : row.Delta == 0  ? "inv-row-counted"
+                : "inv-row-diff";
+
+        <MudPaper Elevation="2" Class="@($"pa-3 mb-2 {css}")"
+                  Style="@($"border-radius:8px;cursor:{(!row.Applied ? "pointer" : "default")};")"
+                  @onclick="() => { StartCount(row); _locationPicker = null; }">
+            <div class="d-flex align-center justify-space-between">
+                <div>
+                    <MudText Style="font-family:monospace;font-size:0.9rem;font-weight:700;">
+                        @row.LocationCode
+                    </MudText>
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;">@row.LocationDesc</MudText>
+                </div>
+                <div class="d-flex flex-column align-end">
+                    @if (row.IsCounted)
+                    {
+                        <MudText Style="font-weight:700;color:#4FAB5B;">@row.CountedQty @row.UoM ✓</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">att: @row.ExpectedQty</MudText>
+                    }
+                    else
+                    {
+                        <MudText Style="color:#94A3B8;">@row.ExpectedQty @row.UoM</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">DA CONTARE</MudChip>
+                    }
+                </div>
+            </div>
+        </MudPaper>
+    }
+}
+
+@* ═══════════════════════════════════════════════════════════════════════════
+   SCHERMATA 2 — Lista conteggi
+   ═══════════════════════════════════════════════════════════════════════════ *@
+else if (_activeCount is null && _extraCode is null)
+{
+    <div class="d-flex align-center mb-1 gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                       OnClick="BackToSelection" />
+        <div style="flex:1;min-width:0;">
+            <MudText Typo="Typo.subtitle1" Style="font-weight:700;">
+                @_session.WarehouseDesc
+                @if (!string.IsNullOrEmpty(_session.Zone)) { <span Style="color:#94A3B8;"> · @_session.Zone</span> }
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">
+                @_session.Counts.Count(c => c.IsCounted)/@_session.Counts.Count contati
+                · @_session.StartedAt.ToString("HH:mm")
+            </MudText>
+        </div>
+    </div>
+
+    <MudProgressLinear Value="@(_session.Counts.Count > 0 ? (double)_session.Counts.Count(c => c.IsCounted) / _session.Counts.Count * 100 : 0)"
+                       Color="Color.Warning" Rounded="true" Size="Size.Medium" Class="mb-2" />
+
+    @* ─── Filtri ─────────────────────────────────────────────────────────── *@
+    <MudPaper Class="pa-2 mb-2" Style="border-radius:8px;background:#242e42;">
+        <div class="d-flex align-center gap-3 flex-wrap">
+            <MudSwitch @bind-Value="_hideCountted" Color="Color.Primary" Size="Size.Small"
+                       Label="Solo da contare" />
+            <MudSwitch @bind-Value="_hideZeroStock" Color="Color.Default" Size="Size.Small"
+                       Label="Nascondi stock zero" />
+            <MudText Typo="Typo.caption" Style="color:#64748B;">
+                (@FilteredCounts.Count() righe)
+            </MudText>
+        </div>
+    </MudPaper>
+
+    @* ─── Barcode scan ────────────────────────────────────────────────────── *@
+    <BarcodeInput Label="Scan articolo o locazione" OnCodeScanned="OnListBarcodeScanned" AutoFocus="true" />
+
+    @* ─── Lista ──────────────────────────────────────────────────────────── *@
+    @foreach (var count in FilteredCounts)
+    {
+        var cssClass = count.Applied    ? "inv-row-counted"
+                     : !count.IsCounted ? "inv-row-pending"
+                     : count.Delta == 0  ? "inv-row-counted"
+                     : "inv-row-diff";
+
+        <MudPaper Elevation="2" Class="@($"pa-3 mb-2 {cssClass}")"
+                  Style="@($"border-radius:8px;cursor:{(!count.Applied ? "pointer" : "default")};")"
+                  @onclick="() => StartCount(count)">
+            <div class="d-flex align-center justify-space-between">
+                <div style="min-width:0;flex:1;">
+                    <div class="d-flex gap-1 align-center flex-wrap">
+                        <MudText Style="font-family:monospace;font-size:0.8rem;color:#64748B;">
+                            @count.LocationCode
+                        </MudText>
+                        @if (count.Applied)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">APPLICATO</MudChip>
+                        }
+                        else if (count.IsCounted && count.Delta != 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error">
+                                Δ @(count.Delta > 0 ? "+" : "")@count.Delta
+                            </MudChip>
+                        }
+                        @if (count.ExpectedQty == 0 && count.IsCounted)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Warning">EXTRA</MudChip>
+                        }
+                    </div>
+                    <MudText Style="font-weight:700;font-size:0.95rem;">@count.ArticleCode</MudText>
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;word-break:break-word;">@count.ArticleDesc</MudText>
+                </div>
+                <div class="d-flex flex-column align-end ml-2" style="white-space:nowrap;">
+                    @if (count.IsCounted)
+                    {
+                        <MudText Style="font-weight:700;color:#4FAB5B;">@count.CountedQty @count.UoM ✓</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">att: @count.ExpectedQty</MudText>
+                    }
+                    else
+                    {
+                        <MudText Style="color:#94A3B8;">@count.ExpectedQty @count.UoM</MudText>
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning">DA CONTARE</MudChip>
+                    }
+                </div>
+            </div>
+        </MudPaper>
+    }
+
+    @* ─── Pulsante chiusura (parziale o totale) ───────────────────────────── *@
+    @if (_session.Counts.Any(c => c.IsCounted))
+    {
+        var counted    = _session.Counts.Count(c => c.IsCounted);
+        var uncounted  = _session.Counts.Count(c => !c.IsCounted);
+        var withDelta  = _session.Counts.Count(c => c.IsCounted && c.Delta != 0 && !c.Applied);
+
+        @if (withDelta > 0)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mt-2">
+                @withDelta rettifica/e verranno inviate all'ERP (SINV/CINV).
+            </MudAlert>
+        }
+        @if (uncounted > 0)
+        {
+            <MudAlert Severity="Severity.Info" Class="mt-1">
+                @uncounted articolo/i non contato/i — verrà ignorato/i alla chiusura.
+            </MudAlert>
+        }
+
+        <MudButton Variant="Variant.Filled" Color="Color.Success" FullWidth="true"
+                   Size="Size.Large" StartIcon="@Icons.Material.Filled.Check"
+                   OnClick="ApplyAndClose" Disabled="@_applying" Class="mt-2">
+            @if (_applying) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else { <span>APPLICA @counted CONTATI E CHIUDI</span> }
+        </MudButton>
+    }
+}
+
+@* ═══════════════════════════════════════════════════════════════════════════
+   SCHERMATA 3a — Articolo non in lista (trovato fisicamente ma non atteso)
+   ═══════════════════════════════════════════════════════════════════════════ *@
+else if (_extraCode is not null)
+{
+    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                   OnClick="CancelExtra" Class="mb-2" />
+
+    <MudAlert Severity="Severity.Warning" Class="mb-3">
+        <strong>@_extraCode</strong> non trovato nella lista — dichiara dove si trova e quanti pezzi.
+    </MudAlert>
+
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#2d2418;">
+        <MudText Style="font-family:monospace;font-weight:700;font-size:1.1rem;">@_extraCode</MudText>
+        <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_extraDesc</MudText>
+    </MudPaper>
+
+    <MudText Typo="Typo.subtitle2" Class="mb-1" Style="color:#93C0DC;">Locazione dove trovato</MudText>
+    <BarcodeInput Label="Scan locazione" OnCodeScanned="OnExtraLocationScanned" AutoFocus="true" />
+
+    @if (_extraLocation is not null)
+    {
+        <MudChip T="string" Color="Color.Info" Class="mb-2">@_extraLocation</MudChip>
+
+        <MudNumericField @bind-Value="_extraQty" Label="Quantità"
+                         Variant="Variant.Outlined" Min="0m" Step="0.001m" Culture="@CultureInfo.CurrentCulture" Class="mb-3" />
+
+        <MudButton Variant="Variant.Filled" Color="Color.Warning" FullWidth="true"
+                   Size="Size.Large" StartIcon="@Icons.Material.Filled.AddCircle"
+                   OnClick="AddExtraCount">
+            DICHIARA EXTRA
+        </MudButton>
+    }
+}
+
+@* ═══════════════════════════════════════════════════════════════════════════
+   SCHERMATA 3b — Conteggio singola riga
+   ═══════════════════════════════════════════════════════════════════════════ *@
+else if (_activeCount is not null)
+{
+    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                   OnClick="() => _activeCount = null" Class="mb-2" />
+
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2038;">
+        <MudText Style="font-family:monospace;color:#94A3B8;">@_activeCount.LocationCode</MudText>
+        <div class="d-flex align-center gap-1 mt-1 mb-1">
+            <MudText Style="font-weight:700;font-size:1.1rem;">@_activeCount.ArticleCode</MudText>
+            <ArticleInfoButton ArticleCode="@_activeCount.ArticleCode" />
+        </div>
+        <MudText Typo="Typo.body2" Style="color:#94A3B8;">@_activeCount.ArticleDesc</MudText>
+        <MudText Typo="Typo.caption" Style="color:#94A3B8;margin-top:4px;">
+            Giacenza attesa: <strong>@QtyFmt(_activeCount.ExpectedQty) @_activeCount.UoM</strong>
+        </MudText>
+    </MudPaper>
+
+    <MudNumericField @bind-Value="_countedQty" Label="Quantità contata"
+                     Variant="Variant.Outlined" Min="0m" Step="0.001m" Culture="@CultureInfo.CurrentCulture"
+                     Class="mb-3" AutoFocus="true" />
+
+    @if (_countedQty >= 0 && _countedQty - _activeCount.ExpectedQty != 0)
+    {
+        <MudAlert Severity="Severity.Warning" Class="mb-2">
+            @{ var d = _countedQty - _activeCount.ExpectedQty; }
+            Delta: @(d > 0 ? "+" : "")@QtyFmt(d) @_activeCount.UoM rispetto alla giacenza attesa
+        </MudAlert>
+    }
+
+    <MudButton Variant="Variant.Filled" Color="Color.Warning" FullWidth="true"
+               Size="Size.Large" StartIcon="@Icons.Material.Filled.Check"
+               OnClick="SaveCount" Disabled="@(_countedQty < 0)">
+        SALVA CONTEGGIO
+    </MudButton>
+}
+
+@code {
+    private InventorySession?  _session;
+    private InventorySession?  _openSession;
+    private InventoryCount?    _activeCount;
+    private decimal            _countedQty;
+
+    private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+    private string             _selWarehouse = "";
+    private string             _selZone      = "";
+    private List<WarehouseDto> _warehouses   = [];
+    private bool _loading;
+    private bool _applying;
+
+    // Filtri lista
+    private bool _hideCountted  = false;
+    private bool _hideZeroStock = true;
+
+    // Picker locazione (stesso articolo in più posti)
+    private List<InventoryCount>? _locationPicker;
+    private string _pickerArticleCode = "";
+
+    // Articolo extra (scansionato ma non in lista)
+    private string? _extraCode;
+    private string? _extraDesc;
+    private string? _extraLocation;
+    private string  _extraWarehouse = "";
+    private decimal _extraQty = 1;
+
+    private IEnumerable<InventoryCount> FilteredCounts => _session!.Counts
+        .Where(c => !_hideCountted  || !c.IsCounted)
+        .Where(c => !_hideZeroStock || c.ExpectedQty != 0 || c.IsCounted)
+        .OrderBy(c => c.LocationCode)
+        .ThenBy(c => c.ArticleCode);
+
+    // ─── Inizializzazione ────────────────────────────────────────────────────
+
+    protected override async Task OnInitializedAsync()
+    {
+        Session.SetPageTitle("Inventario");
+        _loading = true;
+        try
+        {
+            _warehouses = Erp.IsConfigured
+                ? await Erp.GetWarehousesAsync()
+                : Wms.GetWarehouses();
+
+            if (_warehouses.Count > 0) _selWarehouse = _warehouses[0].Code;
+
+            if (Logic.IsConfigured && Session.IsLoggedIn)
+                _openSession = await Logic.GetOpenInventorySessionAsync(Session.OperatorCode!);
+        }
+        catch { /* non bloccante */ }
+        finally { _loading = false; }
+    }
+
+    // ─── Gestione sessione ────────────────────────────────────────────────────
+
+    private void ResumeSession()
+    {
+        _session = _openSession; _openSession = null;
+        Session.SetPrintContext("INVENTORY", new() { ["MGCOD"] = _session!.WarehouseCode, ["ZONE"] = _session.Zone });
+    }
+
+    private async Task AbandonSession()
+    {
+        if (_openSession is null) return;
+        if (Logic.IsConfigured)
+            try { await Logic.AbandonInventorySessionAsync(_openSession.Id); } catch { }
+        _openSession = null;
+    }
+
+    private async Task StartSession()
+    {
+        if (string.IsNullOrEmpty(_selWarehouse)) return;
+        _loading = true;
+
+        List<InventoryCount> counts;
+        var wh = _warehouses.FirstOrDefault(w => w.Code == _selWarehouse);
+
+        if (Erp.IsConfigured)
+        {
+            try { counts = await Erp.GetInventoryRowsAsync(_selWarehouse, _selZone); }
+            catch { Snackbar.Add("Errore caricamento dati ERP", Severity.Error); _loading = false; return; }
+        }
+        else
+        {
+            counts = BuildMockCounts();
+        }
+
+        _session = new InventorySession
+        {
+            OperatorCode  = Session.OperatorCode!,
+            WarehouseCode = _selWarehouse,
+            WarehouseDesc = wh?.Description ?? _selWarehouse,
+            Zone          = _selZone,
+            Counts        = counts
+        };
+
+        if (Logic.IsConfigured)
+            try { await Logic.CreateInventorySessionAsync(_session); }
+            catch { Snackbar.Add("Avviso: sessione non salvata su DB", Severity.Warning); }
+
+        if (counts.Count == 0)
+            Snackbar.Add("Nessun articolo trovato per la zona selezionata", Severity.Warning);
+
+        Session.SetPrintContext("INVENTORY", new() { ["MGCOD"] = _selWarehouse, ["ZONE"] = _selZone });
+        _loading = false;
+    }
+
+    private void BackToSelection()
+    {
+        _session = null; _activeCount = null; _extraCode = null;
+        Session.ClearPrintContext();
+    }
+
+    // ─── Barcode sulla lista ──────────────────────────────────────────────────
+
+    private async Task OnListBarcodeScanned(string code)
+    {
+        code = code.Trim();
+
+        // 1. Cerca per codice articolo (primo non contato, poi contati)
+        var byArt = _session!.Counts
+            .Where(c => c.ArticleCode.Equals(code, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (byArt.Count > 1)
+        {
+            _pickerArticleCode = code.ToUpper();
+            _locationPicker    = byArt.OrderBy(c => c.LocationCode).ToList();
+            return;
+        }
+
+        var target = byArt.FirstOrDefault(c => !c.IsCounted && !c.Applied)
+                  ?? byArt.FirstOrDefault(c => !c.Applied);
+
+        if (target is not null) { StartCount(target); return; }
+
+        // 2. Cerca per codice locazione (primo articolo non contato)
+        var byLoc = _session!.Counts
+            .Where(c => c.LocationCode.Equals(code, StringComparison.OrdinalIgnoreCase)
+                     && !c.IsCounted && !c.Applied)
+            .OrderBy(c => c.ArticleCode)
+            .FirstOrDefault();
+
+        if (byLoc is not null) { StartCount(byLoc); return; }
+
+        // 3. Già tutti contati per questa locazione/articolo?
+        if (_session!.Counts.Any(c => c.ArticleCode.Equals(code, StringComparison.OrdinalIgnoreCase) && c.IsCounted) ||
+            _session!.Counts.Any(c => c.LocationCode.Equals(code, StringComparison.OrdinalIgnoreCase) && c.IsCounted))
+        {
+            Snackbar.Add($"{code}: già contato/i", Severity.Info);
+            return;
+        }
+
+        // 4. Non trovato → offri dichiarazione extra
+        _extraCode     = code.ToUpper();
+        _extraLocation = null;
+        _extraWarehouse = _session.WarehouseCode;
+        _extraQty      = 1;
+        _extraDesc     = "";
+
+        if (Erp.IsConfigured)
+            try
+            {
+                var art = await Erp.GetArticleAsync(code);
+                _extraDesc = art?.Description ?? "";
+            }
+            catch { }
+        else
+        {
+            var art = Wms.GetArticle(code);
+            _extraDesc = art?.Description ?? "";
+        }
+    }
+
+    // ─── Picker locazione ────────────────────────────────────────────────────
+
+    private void AddLocationFromPicker()
+    {
+        _extraCode     = _pickerArticleCode;
+        _extraDesc     = _locationPicker?.FirstOrDefault()?.ArticleDesc ?? "";
+        _extraLocation = null;
+        _extraWarehouse = _session!.WarehouseCode;
+        _extraQty      = 1;
+        _locationPicker = null;
+    }
+
+    private void OnPickerBarcodeScanned(string code)
+    {
+        if (_locationPicker is null) return;
+        var row = _locationPicker.FirstOrDefault(c =>
+            c.LocationCode.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (row is not null)
+        {
+            _locationPicker = null;
+            StartCount(row);
+        }
+        else
+        {
+            Snackbar.Add($"{code}: locazione non trovata nella lista", Severity.Warning);
+        }
+    }
+
+    // ─── Articolo extra (fuori zona) ─────────────────────────────────────────
+
+    private async Task OnExtraLocationScanned(string code)
+    {
+        var lc = code.Trim().ToUpper();
+        if (Erp.IsConfigured)
+        {
+            try
+            {
+                var mg = await Erp.GetLocationWarehouseAsync(lc);
+                _extraLocation  = lc;
+                _extraWarehouse = mg ?? _session!.WarehouseCode;
+            }
+            catch { _extraLocation = lc; }
+        }
+        else
+        {
+            _extraLocation  = lc;
+            _extraWarehouse = _session!.WarehouseCode;
+        }
+    }
+
+    private async Task AddExtraCount()
+    {
+        if (_extraCode is null || _extraLocation is null) return;
+        var count = new InventoryCount
+        {
+            WarehouseCode = _extraWarehouse,
+            ArticleCode   = _extraCode,
+            ArticleDesc   = _extraDesc ?? "",
+            LocationCode  = _extraLocation,
+            ExpectedQty   = 0,
+            CountedQty    = _extraQty
+        };
+        _session!.Counts.Add(count);
+
+        if (Logic.IsConfigured)
+            try { await Logic.AddInventoryCountAsync(_session.Id, count); } catch { }
+
+        Snackbar.Add($"{_extraCode}: {_extraQty} in {_extraLocation} dichiarati", Severity.Success);
+        _extraCode = null; _extraLocation = null; _extraQty = 1;
+    }
+
+    private void CancelExtra() { _extraCode = null; _extraLocation = null; }
+
+    // ─── Conteggio ────────────────────────────────────────────────────────────
+
+    private void StartCount(InventoryCount count)
+    {
+        if (count.Applied) return;
+        _activeCount = count;
+        _countedQty  = count.CountedQty ?? count.ExpectedQty;
+    }
+
+    private async Task SaveCount()
+    {
+        if (_activeCount is null) return;
+        _activeCount.CountedQty = _countedQty;
+
+        if (Logic.IsConfigured)
+            try { await Logic.UpdateCountAsync(_activeCount.Id, _countedQty); } catch { }
+
+        var delta = _countedQty - _activeCount.ExpectedQty;
+        Snackbar.Add(delta == 0
+            ? $"{_activeCount.ArticleCode}: ✓ confermato"
+            : $"{_activeCount.ArticleCode}: Δ {(delta > 0 ? "+" : "")}{delta} {_activeCount.UoM}",
+            delta == 0 ? Severity.Success : Severity.Warning);
+
+        _activeCount = null;
+    }
+
+    // ─── Chiusura e applicazione rettifiche ──────────────────────────────────
+
+    private async Task ApplyAndClose()
+    {
+        if (_session is null) return;
+        _applying = true;
+
+        var sessionRef = $"INV-{_session.Id:N}"[..12];
+        var toApply    = _session.Counts.Where(c => c.IsCounted && c.Delta != 0 && !c.Applied).ToList();
+        var errors     = new List<string>();
+
+        try
+        {
+            foreach (var count in toApply)
+            {
+                if (Erp.IsConfigured)
+                {
+                    try
+                    {
+                        var (ok, msg) = await Erp.ExecuteInventoryAdjustmentAsync(
+                            count.ArticleCode, count.WarehouseCode, count.LocationCode,
+                            count.Delta, Session.OperatorCode!, sessionRef);
+
+                        if (ok)
+                        {
+                            count.Applied = true;
+                            if (Logic.IsConfigured)
+                                try { await Logic.MarkCountAppliedAsync(count.Id); } catch { }
+                        }
+                        else errors.Add(msg);
+                    }
+                    catch (Exception ex) { errors.Add($"{count.ArticleCode}: {ex.Message}"); }
+                }
+                else
+                {
+                    count.Applied = true;
+                }
+            }
+
+            if (errors.Count > 0)
+            {
+                Snackbar.Add($"{errors.Count} errori: {string.Join("; ", errors)}", Severity.Error);
+            }
+            else
+            {
+                if (Logic.IsConfigured)
+                    try { await Logic.CloseInventorySessionAsync(_session.Id); } catch { }
+
+                var applied = toApply.Count;
+                var ignored = _session.Counts.Count(c => !c.IsCounted);
+                Snackbar.Add(
+                    $"Inventario chiuso — {applied} rettifiche applicate, {ignored} righe ignorate",
+                    Severity.Success);
+                _session = null;
+            }
+        }
+        finally
+        {
+            _applying = false;
+        }
+    }
+
+    // ─── Mock fallback ────────────────────────────────────────────────────────
+
+    private List<InventoryCount> BuildMockCounts()
+    {
+        var counts = new List<InventoryCount>();
+        var locations = Wms.GetLocations(_selWarehouse)
+            .Where(l => string.IsNullOrEmpty(_selZone) ||
+                        l.Code.StartsWith(_selZone, StringComparison.OrdinalIgnoreCase));
+        foreach (var loc in locations)
+        {
+            var detail = Wms.GetLocation(_selWarehouse, loc.Code);
+            if (detail is null) continue;
+            foreach (var c in detail.Contents)
+                counts.Add(new InventoryCount
+                {
+                    WarehouseCode = _selWarehouse,
+                    ArticleCode   = c.ArticleCode,
+                    ArticleDesc   = c.ArticleDesc,
+                    UoM           = c.UoM,
+                    LocationCode  = loc.Code,
+                    ExpectedQty   = c.Quantity
+                });
+        }
+        return counts;
+    }
+}

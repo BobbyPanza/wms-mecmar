@@ -1,0 +1,471 @@
+@page "/move/cart"
+
+@using System.Globalization
+@inject SessionService Session
+@inject MockWmsService Wms
+@inject ErpService Erp
+@inject LogicService Logic
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>Spostamento Carrello</PageTitle>
+
+@* ─── Header ─────────────────────────────────────────────────────────────── *@
+<div class="d-flex align-center mb-3 gap-2">
+    <MudIcon Icon="@Icons.Material.Filled.ShoppingCart" Color="Color.Primary" />
+    <MudText Typo="Typo.h6">Carrello</MudText>
+    <MudChip T="string" Size="Size.Small" Color="Color.Primary">@Session.Cart.Count righe</MudChip>
+    <MudSpacer />
+    @if (Session.Cart.Count > 0)
+    {
+        <MudTooltip Text="Svuota carrello">
+            <MudIconButton Icon="@Icons.Material.Filled.DeleteSweep" Color="Color.Error"
+                           Size="Size.Small" OnClick="ClearCart" />
+        </MudTooltip>
+    }
+</div>
+
+@if (_loading)
+{
+    <div class="d-flex justify-center mt-6">
+        <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+    </div>
+}
+else if (_phase == Phase.Accumulo)
+{
+    @* ─── Fase 1: Accumulo ────────────────────────────────────────────────── *@
+
+    @foreach (var row in Session.Cart.ToList())
+    {
+        <MudPaper Elevation="2" Class="pa-3 mb-2 wms-cart-row" Style="border-radius:8px;">
+            <div class="d-flex align-start justify-space-between">
+                <div style="min-width:0;flex:1;">
+                    <div class="d-flex align-center gap-1">
+                        <MudText Style="font-weight:700;font-family:monospace;">@row.ArticleCode</MudText>
+                        <ArticleInfoButton ArticleCode="@row.ArticleCode" />
+                    </div>
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;word-break:break-word;">@row.ArticleDesc</MudText>
+                    <div class="d-flex align-center gap-2 mt-1">
+                        <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.LocationOn" Color="Color.Error">
+                            @row.SourceLocation
+                        </MudChip>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">@row.Quantity @row.UoM</MudText>
+                        @if (row.IsEvaded)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" Style="color:#94A3B8;" />
+                            <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.Flag" Color="Color.Success">
+                                @row.DestLocation
+                            </MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">dest. da assegnare</MudChip>
+                        }
+                    </div>
+                </div>
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error"
+                               Size="Size.Small" OnClick="() => RemoveRow(row.Id)" />
+            </div>
+        </MudPaper>
+    }
+
+    @* Form aggiunta riga *@
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#242e42;">
+        <MudText Typo="Typo.subtitle2" Class="mb-2" Style="color:#93C0DC;">
+            ➕ Aggiungi riga
+        </MudText>
+
+        @if (_newArticle is null)
+        {
+            <BarcodeInput Label="Scansiona articolo" OnCodeScanned="OnNewArticleScanned" AutoFocus="true" />
+        }
+        else
+        {
+            <div class="d-flex align-center gap-1 mb-2">
+                <MudChip T="string" Color="Color.Primary" Size="Size.Small" Class="wms-code-chip">
+                    @_newArticle.Code
+                </MudChip>
+                <ArticleInfoButton ArticleCode="@_newArticle.Code" />
+                <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small"
+                               OnClick="ResetNewRow" title="Cambia articolo" />
+            </div>
+
+            @if (_newLocations.Count > 0 && _newSource is null)
+            {
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;" Class="mb-1">
+                    Locazione origine — tocca o scansiona
+                </MudText>
+                @foreach (var loc in _newLocations)
+                {
+                    var qc = loc.Quantity > loc.MinQty ? "#4FAB5B"
+                           : loc.Quantity > 0          ? "#D4891A" : "#E05252";
+                    <MudPaper Elevation="1" Class="pa-2 mb-1"
+                              Style="@($"border-radius:6px;background:#1e2a40;cursor:{(loc.Quantity>0?"pointer":"default")};")"
+                              @onclick="() => SelectNewSource(loc)">
+                        <div class="d-flex justify-space-between align-center">
+                            <div>
+                                <MudText Style="font-family:monospace;font-size:0.9rem;font-weight:700;">@loc.LocationCode</MudText>
+                                @if (loc.IsMainWithdrawal)
+                                {
+                                    <MudChip T="string" Size="Size.Small" Color="Color.Primary">P</MudChip>
+                                }
+                            </div>
+                            <MudText Style="@($"font-weight:700;color:{qc};")">@QtyFmt(loc.Quantity) @_newArticle.UoM</MudText>
+                        </div>
+                    </MudPaper>
+                }
+                <BarcodeInput Label="Scan loc. origine" OnCodeScanned="OnNewSourceScanned" AutoFocus="false" />
+            }
+
+            @if (_newSource is not null)
+            {
+                <MudChip T="string" Color="Color.Error" Size="Size.Small" Class="mb-2">
+                    @_newSource — @_newSourceQty @_newArticle.UoM
+                </MudChip>
+
+                <MudNumericField @bind-Value="_newQty" Label="Quantità"
+                                 Variant="Variant.Outlined" Min="0.001m"
+                                 Max="@_newSourceQty" Step="0.001m" Culture="@CultureInfo.CurrentCulture" Class="mb-2" />
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                           StartIcon="@Icons.Material.Filled.AddShoppingCart"
+                           Disabled="@(_newQty <= 0)"
+                           OnClick="AddToCart">
+                    AGGIUNGI AL CARRELLO
+                </MudButton>
+            }
+        }
+    </MudPaper>
+
+    @if (Session.Cart.Count > 0)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Secondary" FullWidth="true"
+                   Size="Size.Large"
+                   StartIcon="@Icons.Material.Filled.LocalShipping"
+                   OnClick="GoToEvadi" Class="mt-2">
+            EVADI CARRELLO (@Session.Cart.Count righe)
+        </MudButton>
+    }
+}
+else
+{
+    @* ─── Fase 2: Evasione ────────────────────────────────────────────────── *@
+    <MudText Typo="Typo.subtitle2" Class="mb-1" Style="color:#93C0DC;">
+        Assegna la destinazione — seleziona una o più righe, poi scansiona la locazione
+    </MudText>
+
+    <div class="d-flex align-center gap-2 mb-2">
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="SelectAll">
+            Seleziona tutti
+        </MudButton>
+        <MudButton Variant="Variant.Text" Size="Size.Small" OnClick="DeselectAll">
+            Deseleziona
+        </MudButton>
+        <MudSpacer />
+        <MudText Typo="Typo.caption" Style="color:#94A3B8;">
+            @Session.Cart.Count(r => r.IsEvaded)/@Session.Cart.Count evase
+        </MudText>
+    </div>
+
+    @foreach (var row in Session.Cart.ToList())
+    {
+        var bg = row.IsEvaded ? "#1e2d20" : "#1e2a40";
+        <MudPaper Elevation="2" Class="pa-2 mb-1"
+                  Style="@($"border-radius:8px;background:{bg};")"
+                  @onclick="() => ToggleSelect(row)">
+            <div class="d-flex align-center gap-2">
+                <MudCheckBox Value="@row.IsSelected"
+                             ValueChanged="@((bool v) => row.IsSelected = v)"
+                             Color="Color.Primary" Size="Size.Small"
+                             @onclick:stopPropagation="true" />
+                <div style="flex:1;min-width:0;">
+                    <div class="d-flex align-center gap-1">
+                        <MudText Style="font-family:monospace;font-size:0.85rem;font-weight:700;">@row.ArticleCode</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">@row.Quantity @row.UoM</MudText>
+                    </div>
+                    <div class="d-flex align-center gap-1 flex-wrap">
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error">@row.SourceLocation</MudChip>
+                        <MudIcon Icon="@Icons.Material.Filled.ArrowForward" Size="Size.Small" Style="color:#64748B;" />
+                        @if (row.IsEvaded)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Success">@row.DestLocation</MudChip>
+                        }
+                        else
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">—</MudChip>
+                        }
+                    </div>
+                </div>
+            </div>
+        </MudPaper>
+    }
+
+    <MudDivider Class="my-3" />
+
+    <MudText Typo="Typo.caption" Style="color:#94A3B8;" Class="mb-1">
+        Scansiona destinazione per le righe selezionate:
+    </MudText>
+    <BarcodeInput Label="Locazione destinazione" OnCodeScanned="OnDestScanned" AutoFocus="true" />
+
+    @if (_lastDest is not null)
+    {
+        <MudAlert Severity="Severity.Info" Class="mt-2">
+            Destinazione <strong>@_lastDest</strong> assegnata a @_lastAssignCount riga/e
+        </MudAlert>
+    }
+
+    <div class="d-flex gap-2 mt-3">
+        <MudButton Variant="Variant.Outlined" Color="Color.Default" OnClick="() => _phase = Phase.Accumulo">
+            ← Torna ad accumulo
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success" Disabled="@(!CanConfirm || _confirming)"
+                   OnClick="ConfirmEvadi" Class="flex-grow-1">
+            @if (_confirming) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else { <span>CONFERMA (@Session.Cart.Count(r => r.IsEvaded) spostamenti)</span> }
+        </MudButton>
+    </div>
+}
+
+@code {
+    private enum Phase { Accumulo, Evasione }
+    private Phase _phase = Phase.Accumulo;
+    private bool _confirming;
+    private bool _loading;
+    private string? _lastDest;
+    private int _lastAssignCount;
+
+    // Form nuova riga
+    private ArticleDto? _newArticle;
+    private List<ArticleLocationDto> _newLocations = [];
+    private string? _newSource;
+    private string  _newSourceWarehouse = "";
+    private decimal _newSourceQty;
+    private decimal _newQty = 1;
+
+    private bool CanConfirm => Session.Cart.Any(r => r.IsEvaded) && !_confirming;
+
+    private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    protected override async Task OnInitializedAsync()
+    {
+        Session.SetPageTitle("Spostamento Carrello");
+        Session.SetPrintContext("CART", new() { ["OPCOD"] = Session.OperatorCode ?? "" });
+        if (Logic.IsConfigured && Session.IsLoggedIn)
+        {
+            _loading = true;
+            try
+            {
+                var rows = await Logic.LoadCartAsync(Session.OperatorCode!);
+                Session.Cart.Clear();
+                foreach (var r in rows) Session.Cart.Add(r);
+                Session.NotifyStateChanged();
+            }
+            catch { /* carrello in memoria resta vuoto */ }
+            finally { _loading = false; }
+        }
+    }
+
+    // ─── Accumulo ────────────────────────────────────────────────────────────
+
+    private async Task OnNewArticleScanned(string code)
+    {
+        if (Erp.IsConfigured)
+        {
+            try { _newArticle = await Erp.GetArticleAsync(code); }
+            catch { Snackbar.Add("Errore connessione DB", Severity.Error); return; }
+        }
+        else _newArticle = Wms.GetArticle(code);
+
+        if (_newArticle is null) { Snackbar.Add($"Articolo {code} non trovato", Severity.Error); return; }
+
+        _newLocations = (_newArticle.Locations.Count > 0
+            ? _newArticle.Locations
+            : Wms.GetArticleLocations(_newArticle.Code))
+            .OrderByDescending(l => l.Quantity).ToList();
+        _newSource = null; _newSourceWarehouse = ""; _newQty = 1;
+    }
+
+    private void SelectNewSource(ArticleLocationDto loc)
+    {
+        if (loc.Quantity <= 0) return;
+        _newSource          = loc.LocationCode;
+        _newSourceWarehouse = loc.WarehouseCode;
+        _newSourceQty       = loc.Quantity;
+    }
+
+    private async Task OnNewSourceScanned(string code)
+    {
+        var loc = _newLocations.FirstOrDefault(l =>
+            l.LocationCode.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (loc is not null) { SelectNewSource(loc); return; }
+
+        var lcCod = code.Trim().ToUpper();
+        if (Erp.IsConfigured)
+        {
+            try
+            {
+                var (mg, qty) = await Erp.GetStockAtLocationAsync(_newArticle!.Code, lcCod);
+                _newSource          = lcCod;
+                _newSourceWarehouse = mg;
+                _newSourceQty       = qty;
+            }
+            catch { Snackbar.Add("Errore connessione DB", Severity.Error); }
+        }
+        else
+        {
+            _newSource          = lcCod;
+            _newSourceWarehouse = "MAG";
+            _newSourceQty       = _newArticle is not null ? Wms.GetStock(_newArticle.Code, "MAG", lcCod) : 0;
+        }
+    }
+
+    private async Task AddToCart()
+    {
+        if (_newArticle is null || _newSource is null || _newQty <= 0) return;
+        var row = new CartRow
+        {
+            ArticleCode     = _newArticle.Code,
+            ArticleDesc     = _newArticle.Description,
+            UoM             = _newArticle.UoM,
+            SourceWarehouse = _newSourceWarehouse,
+            SourceLocation  = _newSource,
+            Quantity        = _newQty
+        };
+        Session.Cart.Add(row);
+        Session.NotifyStateChanged();
+
+        if (Logic.IsConfigured)
+        {
+            try { await Logic.AddRowAsync(Session.OperatorCode!, row); }
+            catch { Snackbar.Add("Avviso: riga non salvata su DB", Severity.Warning); }
+        }
+
+        Snackbar.Add($"{_newArticle.Code} aggiunto", Severity.Success);
+        ResetNewRow();
+    }
+
+    private void ResetNewRow()
+    {
+        _newArticle = null; _newLocations = []; _newSource = null; _newSourceWarehouse = ""; _newQty = 1;
+    }
+
+    private async Task RemoveRow(Guid id)
+    {
+        var row = Session.Cart.FirstOrDefault(r => r.Id == id);
+        if (row is null) return;
+        Session.Cart.Remove(row);
+        Session.NotifyStateChanged();
+        if (Logic.IsConfigured)
+            try { await Logic.RemoveRowAsync(id); } catch { }
+    }
+
+    private async Task ClearCart()
+    {
+        Session.Cart.Clear();
+        Session.NotifyStateChanged();
+        if (Logic.IsConfigured)
+            try { await Logic.ClearCartAsync(Session.OperatorCode!); } catch { }
+    }
+
+    // ─── Evasione ────────────────────────────────────────────────────────────
+
+    private void GoToEvadi()
+    {
+        foreach (var r in Session.Cart) r.IsSelected = !r.IsEvaded;
+        _phase = Phase.Evasione;
+        _lastDest = null;
+    }
+
+    private void SelectAll()   { foreach (var r in Session.Cart) r.IsSelected = true; }
+    private void DeselectAll() { foreach (var r in Session.Cart) r.IsSelected = false; }
+    private void ToggleSelect(CartRow row) => row.IsSelected = !row.IsSelected;
+
+    private async Task OnDestScanned(string code)
+    {
+        var lcCod = code.Trim().ToUpper();
+        string mgCod;
+
+        if (Erp.IsConfigured)
+        {
+            try
+            {
+                var mg = await Erp.GetLocationWarehouseAsync(lcCod);
+                if (mg is null)
+                {
+                    Snackbar.Add($"Locazione {lcCod} non trovata", Severity.Warning);
+                    return;
+                }
+                mgCod = mg;
+            }
+            catch { Snackbar.Add("Errore connessione DB", Severity.Error); return; }
+        }
+        else mgCod = "MAG";
+
+        var selected = Session.Cart.Where(r => r.IsSelected).ToList();
+        if (selected.Count == 0) selected = Session.Cart.Where(r => !r.IsEvaded).Take(1).ToList();
+
+        foreach (var row in selected)
+        {
+            row.DestWarehouse = mgCod;
+            row.DestLocation  = lcCod;
+            row.IsSelected    = false;
+            if (Logic.IsConfigured)
+                try { await Logic.AssignDestinationAsync(row.Id, mgCod, lcCod); } catch { }
+        }
+        _lastDest        = lcCod;
+        _lastAssignCount = selected.Count;
+        Snackbar.Add($"→ {lcCod} su {selected.Count} riga/e", Severity.Info);
+    }
+
+    private async Task ConfirmEvadi()
+    {
+        _confirming = true;
+        var toExecute = Session.Cart.Where(r => r.IsEvaded).ToList();
+        var errors    = new List<string>();
+
+        foreach (var row in toExecute)
+        {
+            bool ok; string msg;
+            if (Erp.IsConfigured)
+            {
+                try
+                {
+                    (ok, msg) = await Erp.ExecuteSimpleMoveAsync(
+                        row.ArticleCode,
+                        row.SourceWarehouse, row.SourceLocation,
+                        row.DestWarehouse!,  row.DestLocation!,
+                        row.Quantity, Session.OperatorCode!);
+                }
+                catch (Exception ex) { ok = false; msg = ex.Message; }
+            }
+            else
+            {
+                await Task.Delay(100);
+                (ok, msg) = Wms.ExecuteSimpleMove(
+                    row.ArticleCode, row.SourceWarehouse, row.SourceLocation,
+                    row.DestWarehouse!, row.DestLocation!, row.Quantity,
+                    Session.OperatorCode!);
+            }
+
+            if (ok)
+            {
+                Session.Cart.Remove(row);
+                if (Logic.IsConfigured)
+                    try { await Logic.RemoveRowAsync(row.Id); } catch { }
+            }
+            else errors.Add($"{row.ArticleCode}: {msg}");
+        }
+
+        Session.NotifyStateChanged();
+
+        if (errors.Count == 0)
+        {
+            Snackbar.Add($"{toExecute.Count} spostamenti completati", Severity.Success);
+            if (Session.Cart.Count == 0) _phase = Phase.Accumulo;
+        }
+        else
+            Snackbar.Add($"{errors.Count} errori: {string.Join("; ", errors)}", Severity.Error);
+
+        _confirming = false;
+    }
+}

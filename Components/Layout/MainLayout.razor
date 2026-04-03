@@ -1,0 +1,140 @@
+@inherits LayoutComponentBase
+@inject SessionService Session
+@inject NavigationManager Nav
+@inject IDialogService DialogService
+@inject ErpService Erp
+@inject IJSRuntime JS
+@implements IDisposable
+
+<MudThemeProvider Theme="_theme" IsDarkMode="true" />
+<MudPopoverProvider />
+<MudDialogProvider FullWidth="true" MaxWidth="MaxWidth.Small" />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Dense="true" Fixed="true" Elevation="4" Style="background:#161d2f;">
+        @if (IsHomePage)
+        {
+            <MudIcon Icon="@Icons.Material.Filled.Warehouse" Color="Color.Primary" Class="ml-1" />
+        }
+        else
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
+                           Color="Color.Default"
+                           Size="Size.Medium"
+                           OnClick="GoBack"
+                           title="Indietro" />
+        }
+
+        <MudText Class="wms-appbar-title ml-2 flex-grow-1">@Session.PageTitle</MudText>
+
+        @if (Session.IsLoggedIn && !string.IsNullOrEmpty(Session.PrintContext))
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Print"
+                           Color="Color.Default"
+                           Size="Size.Medium"
+                           OnClick="OpenPrintDialog"
+                           title="Stampa" />
+        }
+
+        @if (Session.IsLoggedIn)
+        {
+            <MudChip T="string"
+                     Size="Size.Small"
+                     Color="@(Session.IsSupervisor ? Color.Warning : Color.Primary)"
+                     Class="mr-1"
+                     Style="max-width:120px;">
+                @Session.OperatorCode
+            </MudChip>
+        }
+    </MudAppBar>
+
+    <MudMainContent>
+        <MudContainer MaxWidth="MaxWidth.Small" Class="px-2 py-2">
+            @Body
+        </MudContainer>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    [Inject] private ILogger<MainLayout> _log { get; set; } = default!;
+
+    private static readonly MudTheme _theme = new()
+    {
+        PaletteDark = new PaletteDark
+        {
+            Primary         = "#5B9BD5",
+            PrimaryDarken   = "#3f7db5",
+            PrimaryLighten  = "#7ab3e0",
+            Secondary       = "#D4891A",
+            Success         = "#4FAB5B",
+            Warning         = "#E8A020",
+            Error           = "#E05252",
+            Info            = "#4A9ECC",
+            Background      = "#1c2333",
+            BackgroundGray  = "#202736",
+            Surface         = "#242e42",
+            DrawerBackground = "#161d2f",
+            AppbarBackground = "#161d2f",
+            AppbarText      = "#E2E8F0",
+            TextPrimary     = "#E2E8F0",
+            TextSecondary   = "#94A3B8",
+            ActionDefault   = "#B0BDD0",
+            Divider         = "#2d3a52",
+        }
+    };
+
+    private bool IsHomePage  => Nav.Uri == Nav.BaseUri || Nav.Uri.TrimEnd('/').EndsWith("/home");
+    private bool IsLoginPage => Nav.Uri.TrimEnd('/').EndsWith("/login");
+
+    protected override void OnInitialized()
+    {
+        Session.OnChange += StateHasChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+
+        // Inizializza nodo dispositivo (A_NOD) — una volta per circuito
+        if (!Session.NodeReady)
+            await InitNodeAsync();
+
+        if (!Session.IsLoggedIn && !IsLoginPage)
+            Nav.NavigateTo("/login");
+    }
+
+    private async Task InitNodeAsync()
+    {
+        try
+        {
+            const string StorageKey = "wms-node-id";
+
+            var stored = await JS.InvokeAsync<string?>("localStorage.getItem", StorageKey);
+            int.TryParse(stored, out var cdnodFromStorage);
+
+            // Nome dispositivo: userAgent troncato a 30 caratteri
+            var deviceName = await JS.InvokeAsync<string>("eval",
+                "navigator.userAgent.substring(0,30)");
+
+            var cdnod = await Erp.RegisterOrGetNodeAsync(cdnodFromStorage, deviceName);
+
+            if (cdnod != cdnodFromStorage)
+                await JS.InvokeVoidAsync("localStorage.setItem", StorageKey, cdnod.ToString());
+
+            Session.SetNodeId(cdnod);
+        }
+        catch (Exception ex)
+        {
+            // Nodo non critico — il prelievo produzione lo richiederà, le altre funzioni no
+            _log.LogWarning(ex, "InitNodeAsync: impossibile registrare nodo A_NOD");
+        }
+    }
+
+    private void GoBack() => Nav.NavigateTo("/home");
+
+    private Task OpenPrintDialog() =>
+        DialogService.ShowAsync<PrintDialog>("Stampa");
+
+    public void Dispose() => Session.OnChange -= StateHasChanged;
+}

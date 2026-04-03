@@ -1,0 +1,80 @@
+@inject MockWmsService Wms
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Inventory2" Color="Color.Primary" />
+            <MudText Typo="Typo.h6" Style="font-family:monospace;">@ArticleCode</MudText>
+        </div>
+    </TitleContent>
+    <DialogContent>
+
+        @* ─── Immagine placeholder ─────────────────────────────────────── *@
+        <div class="@(_imgExpanded ? "wms-article-image-expanded" : "wms-article-image")"
+             style="cursor:pointer;margin-bottom:12px;background:#1e2a40;border-radius:10px;display:flex;align-items:center;justify-content:center;"
+             @onclick="() => _imgExpanded = !_imgExpanded">
+            <MudIcon Icon="@Icons.Material.Filled.Inventory2"
+                     Style="@(_imgExpanded ? "font-size:160px;color:#5B9BD5;" : "font-size:80px;color:#5B9BD5;")"
+                     title="@(_imgExpanded ? "Riduci" : "Espandi")" />
+            @if (!_imgExpanded)
+            {
+                <MudText Typo="Typo.caption" Style="color:#64748B;margin-left:8px;">
+                    tocca per espandere
+                </MudText>
+            }
+        </div>
+
+        @* ─── Caratteristiche ──────────────────────────────────────────── *@
+        @if (_chars.Count > 0)
+        {
+            <MudText Typo="Typo.subtitle2" Style="color:#93C0DC;margin-bottom:6px;">
+                Caratteristiche
+            </MudText>
+            <MudSimpleTable Dense="true" Hover="false" Style="margin-bottom:12px;">
+                <tbody>
+                    @foreach (var kv in _chars)
+                    {
+                        <tr>
+                            <td style="color:#94A3B8;font-size:0.8rem;width:40%;">@kv.Key</td>
+                            <td style="font-weight:600;font-size:0.85rem;">@kv.Value</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+
+        @* ─── Allegati PDF ────────────────────────────────────────────── *@
+        @if (_pdfs.Count > 0)
+        {
+            <MudText Typo="Typo.subtitle2" Style="color:#93C0DC;margin-bottom:6px;">
+                Allegati PDF
+            </MudText>
+            @foreach (var pdf in _pdfs)
+            {
+                <div class="d-flex align-center gap-2 mb-1" style="padding:6px 0;border-bottom:1px solid #333;">
+                    <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Color="Color.Error" Size="Size.Small" />
+                    <MudText Typo="Typo.body2" Style="word-break:break-word;">@pdf</MudText>
+                </div>
+            }
+        }
+
+    </DialogContent>
+    <DialogActions>
+        <MudButton Color="Color.Primary" OnClick="() => MudDialog.Close()">Chiudi</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
+    [Parameter] public string ArticleCode { get; set; } = "";
+
+    private Dictionary<string, string> _chars = [];
+    private List<string> _pdfs = [];
+    private bool _imgExpanded;
+
+    protected override void OnParametersSet()
+    {
+        _chars = Wms.GetArticleCharacteristics(ArticleCode);
+        _pdfs = Wms.GetArticlePdfs(ArticleCode);
+    }
+}

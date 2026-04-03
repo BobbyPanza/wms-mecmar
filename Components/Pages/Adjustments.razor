@@ -1,0 +1,347 @@
+@page "/adjustments"
+
+@using System.Globalization
+@inject SessionService Session
+@inject MockWmsService Wms
+@inject ErpService Erp
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>Rettifiche</PageTitle>
+
+@* ─── Step indicator ──────────────────────────────────────────────────────── *@
+<div class="wms-stepper mb-3">
+    @for (int i = 0; i < _steps.Length; i++)
+    {
+        var idx = i;
+        <div class="@($"wms-step-dot {(idx < _step ? "done" : idx == _step ? "active" : "")}")"></div>
+        <span class="@($"wms-step-label {(idx == _step ? "active" : "")}")">@_steps[idx]</span>
+    }
+</div>
+
+@* ─── Step 0: Articolo ───────────────────────────────────────────────────── *@
+@if (_step == 0)
+{
+    <MudText Typo="Typo.subtitle1" Class="mb-3" Style="color:#93C0DC;">
+        Scansiona articolo
+    </MudText>
+    <BarcodeInput Label="Codice articolo" OnCodeScanned="OnArticleScanned" AutoFocus="true" />
+
+    @if (_loading)
+    {
+        <div class="d-flex justify-center mt-4">
+            <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+        </div>
+    }
+}
+
+@* ─── Step 1: Locazione ──────────────────────────────────────────────────── *@
+else if (_step == 1)
+{
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2a40;">
+        <div class="d-flex align-center gap-1 mb-1">
+            <MudText Style="font-weight:700;font-family:monospace;font-size:1.1rem;">@_article!.Code</MudText>
+            <ArticleInfoButton ArticleCode="@_article.Code" />
+        </div>
+        <MudText Typo="Typo.body2" Style="color:#94A3B8;">@_article.Description</MudText>
+        <MudText Typo="Typo.caption" Style="color:#64748B;margin-top:2px;">
+            Giacenza totale: <strong>@_article.TotalStock @_article.UoM</strong>
+        </MudText>
+    </MudPaper>
+
+    <MudText Typo="Typo.subtitle1" Class="mb-2" Style="color:#93C0DC;">
+        Seleziona o scansiona locazione
+    </MudText>
+    <BarcodeInput Label="Codice locazione" OnCodeScanned="OnLocationScanned" AutoFocus="true" />
+
+    @if (_article.Locations.Count > 0)
+    {
+        <MudText Typo="Typo.caption" Style="color:#64748B;" Class="mb-1">Locazioni con giacenza:</MudText>
+        @foreach (var loc in _article.Locations)
+        {
+            <MudPaper Elevation="1" Class="pa-3 mb-2"
+                      Style="border-radius:8px;cursor:pointer;background:#1e2a40;"
+                      @onclick="() => SelectLocation(loc)">
+                <div class="d-flex justify-space-between align-center">
+                    <div>
+                        <MudText Style="font-family:monospace;font-weight:700;">@loc.LocationCode</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">@loc.WarehouseCode</MudText>
+                    </div>
+                    <MudText Style="font-weight:700;color:#5B9BD5;">@loc.Quantity @_article.UoM</MudText>
+                </div>
+            </MudPaper>
+        }
+    }
+    else
+    {
+        <MudAlert Severity="Severity.Info" Class="mt-2">
+            Nessuna giacenza trovata — puoi comunque inserire una locazione manualmente.
+        </MudAlert>
+    }
+}
+
+@* ─── Step 2: Quantità ───────────────────────────────────────────────────── *@
+else if (_step == 2)
+{
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2a40;">
+        <div class="d-flex align-center gap-1 mb-1">
+            <MudText Style="font-weight:700;font-family:monospace;font-size:1.1rem;">@_article!.Code</MudText>
+            <ArticleInfoButton ArticleCode="@_article.Code" />
+        </div>
+        <MudText Typo="Typo.body2" Style="color:#94A3B8;">@_article.Description</MudText>
+        <MudDivider Class="my-2" />
+        <div class="d-flex justify-space-between">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Locazione</MudText>
+            <MudText Style="font-family:monospace;font-weight:600;">@_locationCode</MudText>
+        </div>
+        <div class="d-flex justify-space-between mt-1">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Magazzino</MudText>
+            <MudText Style="font-family:monospace;">@_warehouseCode</MudText>
+        </div>
+        <div class="d-flex justify-space-between mt-1">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Giacenza attuale</MudText>
+            <MudText Style="font-weight:700;color:#5B9BD5;">@QtyFmt(_currentQty) @_article.UoM</MudText>
+        </div>
+    </MudPaper>
+
+    <MudNumericField @bind-Value="_newQty" Label="Nuova giacenza"
+                     Variant="Variant.Outlined" Min="0m" Step="0.001m" Culture="@CultureInfo.CurrentCulture"
+                     Class="mb-3" AutoFocus="true" />
+
+    @if (_newQty != _currentQty)
+    {
+        <MudAlert Severity="@(_newQty > _currentQty ? Severity.Warning : Severity.Error)" Class="mb-3">
+            @{ var delta = _newQty - _currentQty; }
+            <div class="d-flex justify-space-between">
+                <span>Delta</span>
+                <strong>@(delta > 0 ? "+" : "")@QtyFmt(delta) @_article!.UoM</strong>
+            </div>
+            <div class="d-flex justify-space-between">
+                <span>Causale</span>
+                <strong>@(delta > 0 ? "REP (rettifica +)" : "REN (rettifica −)")</strong>
+            </div>
+        </MudAlert>
+    }
+
+    <MudButton Variant="Variant.Filled" Color="Color.Warning" FullWidth="true"
+               Size="Size.Large" StartIcon="@Icons.Material.Filled.Check"
+               Disabled="@(_confirming || _newQty < 0)"
+               OnClick="Confirm">
+        @if (_confirming) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+        else              { <span>CONFERMA RETTIFICA</span> }
+    </MudButton>
+}
+
+@* ─── Step 3: Completato ─────────────────────────────────────────────────── *@
+else if (_step == 3)
+{
+    <MudAlert Severity="Severity.Success" Class="mb-3" Icon="@Icons.Material.Filled.CheckCircle">
+        @_successMsg
+    </MudAlert>
+
+    <div class="d-flex gap-2">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                   StartIcon="@Icons.Material.Filled.Repeat"
+                   OnClick="Reset">
+            NUOVA RETTIFICA
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Default" FullWidth="true"
+                   OnClick="GoHome">
+            HOME
+        </MudButton>
+    </div>
+}
+
+@code {
+    private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+    private static readonly string[] _steps = ["Articolo", "Locazione", "Quantità", "Fine"];
+
+    private int    _step;
+    private bool   _loading;
+    private bool   _confirming;
+
+    private ArticleDto? _article;
+    private string  _locationCode   = "";
+    private string  _warehouseCode  = "";
+    private decimal _currentQty;
+    private decimal _newQty;
+    private string  _successMsg = "";
+
+    protected override void OnInitialized()
+    {
+        Session.SetPageTitle("Rettifiche");
+    }
+
+    // ─── Step 0: articolo ────────────────────────────────────────────────────
+
+    private async Task OnArticleScanned(string code)
+    {
+        _loading = true;
+        StateHasChanged();
+
+        if (Erp.IsConfigured)
+        {
+            try { _article = await Erp.GetArticleAsync(code.Trim()); }
+            catch { Snackbar.Add("Errore connessione DB", Severity.Error); _loading = false; return; }
+        }
+        else
+        {
+            await Task.Delay(150);
+            _article = Wms.GetArticle(code.Trim());
+        }
+
+        if (_article is null)
+        {
+            Snackbar.Add($"Articolo '{code}' non trovato", Severity.Warning);
+            _loading = false;
+            return;
+        }
+
+        _step = 1;
+        _loading = false;
+    }
+
+    // ─── Step 1: locazione ───────────────────────────────────────────────────
+
+    private async Task OnLocationScanned(string code)
+    {
+        var lc = code.Trim().ToUpper();
+        string? mg = null;
+
+        if (Erp.IsConfigured)
+        {
+            try { mg = await Erp.GetLocationWarehouseAsync(lc); }
+            catch { /* non bloccante */ }
+        }
+
+        if (mg is null)
+        {
+            // prova dalla lista giacenze dell'articolo
+            var fromList = _article!.Locations.FirstOrDefault(l =>
+                l.LocationCode.Equals(lc, StringComparison.OrdinalIgnoreCase));
+            mg = fromList?.WarehouseCode;
+        }
+
+        if (mg is null && Erp.IsConfigured)
+        {
+            Snackbar.Add($"Locazione {lc} non trovata in A_LOC", Severity.Warning);
+            return;
+        }
+
+        await ApplyLocation(lc, mg ?? "");
+    }
+
+    private async Task SelectLocation(ArticleLocationDto loc)
+    {
+        decimal current = loc.Quantity;
+        // se ERP configurato, rileggere stock attuale (potrebbe essere cambiato)
+        if (Erp.IsConfigured)
+        {
+            try
+            {
+                var (_, qty) = await Erp.GetStockAtLocationAsync(_article!.Code, loc.LocationCode);
+                current = qty;
+            }
+            catch { current = loc.Quantity; }
+        }
+        _locationCode  = loc.LocationCode;
+        _warehouseCode = loc.WarehouseCode;
+        _currentQty    = current;
+        _newQty        = current;
+        _step          = 2;
+    }
+
+    private async Task ApplyLocation(string lc, string mg)
+    {
+        decimal current = 0m;
+        if (Erp.IsConfigured)
+        {
+            try
+            {
+                var (_, qty) = await Erp.GetStockAtLocationAsync(_article!.Code, lc);
+                current = qty;
+            }
+            catch { /* 0 */ }
+        }
+        else
+        {
+            current = _article!.Locations
+                .FirstOrDefault(l => l.LocationCode.Equals(lc, StringComparison.OrdinalIgnoreCase))?.Quantity ?? 0m;
+        }
+
+        _locationCode  = lc;
+        _warehouseCode = mg;
+        _currentQty    = current;
+        _newQty        = current;
+        _step          = 2;
+    }
+
+    // ─── Step 2: conferma ────────────────────────────────────────────────────
+
+    private async Task Confirm()
+    {
+        if (_article is null) return;
+        _confirming = true;
+
+        bool ok;
+        string msg;
+
+        if (Erp.IsConfigured)
+        {
+            try
+            {
+                (ok, msg) = await Erp.ExecuteAdjustmentAsync(
+                    _article.Code, _warehouseCode, _locationCode,
+                    _newQty, Session.OperatorCode!);
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Errore: {ex.Message}", Severity.Error);
+                _confirming = false;
+                return;
+            }
+        }
+        else
+        {
+            await Task.Delay(300);
+            ok  = true;
+            var d = _newQty - _currentQty;
+            msg = $"Mock: {_article.Code} {_locationCode} {(d >= 0 ? "+" : "")}{d}";
+        }
+
+        _confirming = false;
+
+        if (ok)
+        {
+            _successMsg = msg;
+            _step = 3;
+            Session.SetPrintContext("ADJUSTMENT", new()
+            {
+                ["PACOD"] = _article.Code,
+                ["MGCOD"] = _warehouseCode,
+                ["LCCOD"] = _locationCode,
+                ["QTY"]   = _newQty.ToString("G")
+            });
+            Snackbar.Add(msg, Severity.Success);
+        }
+        else
+        {
+            Snackbar.Add(msg, Severity.Error);
+        }
+    }
+
+    // ─── Reset ───────────────────────────────────────────────────────────────
+
+    private void GoHome() => Nav.NavigateTo("/home");
+
+    private void Reset()
+    {
+        _step          = 0;
+        _article       = null;
+        _locationCode  = "";
+        _warehouseCode = "";
+        _currentQty    = 0m;
+        _newQty        = 0m;
+        Session.ClearPrintContext();
+    }
+}

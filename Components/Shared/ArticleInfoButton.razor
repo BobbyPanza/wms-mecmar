@@ -1,0 +1,25 @@
+@inject IDialogService DialogService
+
+<MudIconButton Icon="@Icons.Material.Outlined.Info"
+               Size="Size.Small"
+               Color="Color.Info"
+               Style="min-width:0;padding:2px;"
+               OnClick="ShowInfo"
+               title="Caratteristiche articolo" />
+
+@code {
+    [Parameter] public string ArticleCode { get; set; } = "";
+
+    private async Task ShowInfo()
+    {
+        if (string.IsNullOrWhiteSpace(ArticleCode)) return;
+        var parameters = new DialogParameters<ArticleInfoDialog>
+        {
+            { x => x.ArticleCode, ArticleCode }
+        };
+        await DialogService.ShowAsync<ArticleInfoDialog>(
+            ArticleCode,
+            parameters,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true });
+    }
+}

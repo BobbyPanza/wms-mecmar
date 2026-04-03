@@ -1,0 +1,313 @@
+@page "/list/pick"
+
+@using System.Globalization
+@inject SessionService Session
+@inject MockWmsService Wms
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>Prelievo da Lista</PageTitle>
+
+@if (_list is null)
+{
+    @* ─── Selezione lista ─────────────────────────────────────────────────── *@
+    <MudText Typo="Typo.h6" Class="mb-3">Seleziona lista</MudText>
+    <BarcodeInput Label="Scan barcode lista" OnCodeScanned="OnListBarcode" AutoFocus="true" />
+
+    @foreach (var l in _lists)
+    {
+        var pending = l.Items.Count(i => i.Status != PickStatus.Completed);
+        var noStock = l.Items.Count(i => !i.HasStock && i.Status != PickStatus.Completed);
+        <MudPaper Elevation="2" Class="pa-3 mb-2" Style="border-radius:10px;cursor:pointer;"
+                  @onclick="() => SelectList(l)">
+            <div class="d-flex justify-space-between align-start">
+                <div>
+                    <MudText Style="font-family:monospace;font-weight:700;">@l.Code</MudText>
+                    <MudText Typo="Typo.body2" Style="color:#94A3B8;">@l.Description</MudText>
+                    <MudText Typo="Typo.caption" Style="color:#64748B;">Rif: @l.Reference</MudText>
+                </div>
+                <div class="d-flex flex-column align-end gap-1">
+                    <MudChip T="string" Size="Size.Small"
+                             Color="@(l.Status == "In corso" ? Color.Warning : Color.Default)">
+                        @l.Status
+                    </MudChip>
+                    @if (noStock > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Error"
+                                 Icon="@Icons.Material.Filled.Warning">
+                            @noStock senza scorta
+                        </MudChip>
+                    }
+                </div>
+            </div>
+            <MudProgressLinear Value="@(l.Items.Count > 0 ? (double)l.Items.Count(i => i.Status == PickStatus.Completed) / l.Items.Count * 100 : 0)"
+                               Color="Color.Success" Rounded="true" Size="Size.Small" Class="mt-2" />
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;" Class="mt-1">
+                @l.Items.Count(i => i.Status == PickStatus.Completed)/@l.Items.Count completati
+                · @l.CustomAttributeLabel
+            </MudText>
+        </MudPaper>
+    }
+}
+else if (_activeItem is null)
+{
+    @* ─── Lista articoli ──────────────────────────────────────────────────── *@
+    <div class="d-flex align-center mb-2 gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                       OnClick="() => { _list = null; _activeItem = null; }" />
+        <div style="flex:1;min-width:0;">
+            <MudText Style="font-family:monospace;font-weight:700;font-size:0.95rem;">@_list.Code</MudText>
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_list.Reference</MudText>
+        </div>
+    </div>
+
+    @* Toolbar: sort + hide completate *@
+    <MudPaper Class="pa-2 mb-2" Style="border-radius:8px;background:#242e42;">
+        <div class="d-flex align-center gap-2 flex-wrap">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Ordina:</MudText>
+            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined">
+                <MudButton Color="@(_sortMode == SortMode.MainLoc ? Color.Primary : Color.Default)"
+                           OnClick="() => _sortMode = SortMode.MainLoc">
+                    Loc. Principale
+                </MudButton>
+                <MudButton Color="@(_sortMode == SortMode.BestStock ? Color.Primary : Color.Default)"
+                           OnClick="() => _sortMode = SortMode.BestStock">
+                    Miglior Scorta
+                </MudButton>
+                <MudButton Color="@(_sortMode == SortMode.Custom ? Color.Primary : Color.Default)"
+                           OnClick="() => _sortMode = SortMode.Custom">
+                    @_list.CustomAttributeLabel
+                </MudButton>
+            </MudButtonGroup>
+            <MudSpacer />
+            <MudSwitch @bind-Value="_hideCompleted" Color="Color.Primary" Size="Size.Small"
+                       Label="Nascondi completate" />
+        </div>
+    </MudPaper>
+
+    <BarcodeInput Label="Scan articolo per selezionare" OnCodeScanned="OnItemBarcode" AutoFocus="true" />
+
+    @foreach (var item in SortedItems)
+    {
+        var noStock = !item.HasStock && item.Status != PickStatus.Completed;
+        var bg = item.Status == PickStatus.Completed ? "#1e2d20"
+               : noStock                             ? "#2d1e1e"
+               : "#1e2a40";
+        var borderClass = item.Status == PickStatus.Completed ? "pick-item-done"
+                        : item.Status == PickStatus.Partial   ? "pick-item-partial"
+                        : "pick-item-pending";
+
+        <MudPaper Elevation="1" Class="@($"pa-3 mb-2 {borderClass}")"
+                  Style="@($"border-radius:8px;background:{bg};cursor:pointer;")"
+                  @onclick="() => SelectItem(item)">
+            <div class="d-flex align-start justify-space-between">
+                <div style="min-width:0;flex:1;">
+                    <div class="d-flex align-center gap-1">
+                        <MudText Style="font-weight:700;font-family:monospace;font-size:0.9rem;">@item.ArticleCode</MudText>
+                        <ArticleInfoButton ArticleCode="@item.ArticleCode" />
+                        @if (noStock)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" />
+                        }
+                    </div>
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;word-break:break-word;">@item.ArticleDesc</MudText>
+
+                    <div class="d-flex gap-2 mt-1 flex-wrap">
+                        <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.LocationOn" Color="Color.Primary">
+                            @item.MainLocationCode
+                        </MudChip>
+                        @if (item.BestStockLocationCode != item.MainLocationCode)
+                        {
+                            <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.Star" Color="Color.Warning">
+                                @item.BestStockLocationCode (@item.BestStockQty)
+                            </MudChip>
+                        }
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default">
+                            @_list.CustomAttributeLabel: @item.CustomAttribute
+                        </MudChip>
+                    </div>
+                </div>
+                <div class="d-flex flex-column align-end ml-2">
+                    @if (item.Status == PickStatus.Completed)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                    }
+                    else
+                    {
+                        <MudText Style="font-weight:700;color:#5B9BD5;white-space:nowrap;">
+                            @QtyFmt(item.PickedQty) / @QtyFmt(item.PlannedQty) @item.UoM
+                        </MudText>
+                        @if (item.Status == PickStatus.Partial)
+                        {
+                            <MudText Typo="Typo.caption" Style="color:#D4891A;">
+                                residuo: @QtyFmt(item.RemainingQty)
+                            </MudText>
+                        }
+                    }
+                </div>
+            </div>
+        </MudPaper>
+    }
+
+    @if (_list.Items.All(i => i.Status == PickStatus.Completed))
+    {
+        <MudAlert Severity="Severity.Success" Class="mt-3" Icon="@Icons.Material.Filled.CheckCircle">
+            Lista completata!
+        </MudAlert>
+    }
+}
+else
+{
+    @* ─── Prelievo articolo ───────────────────────────────────────────────── *@
+    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                   OnClick="() => _activeItem = null" Class="mb-2" />
+
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2a40;">
+        <div class="d-flex align-center gap-1 mb-1">
+            <MudText Style="font-weight:700;font-family:monospace;font-size:1.1rem;">@_activeItem.ArticleCode</MudText>
+            <ArticleInfoButton ArticleCode="@_activeItem.ArticleCode" />
+        </div>
+        <MudText Typo="Typo.body2" Style="color:#94A3B8;">@_activeItem.ArticleDesc</MudText>
+
+        <MudDivider Class="my-2" />
+
+        <div class="d-flex justify-space-between mb-1">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Da prelevare</MudText>
+            <MudText Style="font-weight:700;color:#5B9BD5;">@_activeItem.RemainingQty @_activeItem.UoM</MudText>
+        </div>
+        <div class="d-flex justify-space-between mb-1">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Loc. principale</MudText>
+            <MudText Style="font-family:monospace;font-weight:600;">@_activeItem.MainLocationCode</MudText>
+        </div>
+        @if (_activeItem.BestStockLocationCode != _activeItem.MainLocationCode)
+        {
+            <div class="d-flex justify-space-between mb-1">
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;">Miglior scorta</MudText>
+                <MudText Style="font-family:monospace;font-weight:600;color:#D4891A;">
+                    @_activeItem.BestStockLocationCode (@_activeItem.BestStockQty @_activeItem.UoM)
+                </MudText>
+            </div>
+        }
+        <div class="d-flex justify-space-between">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_list!.CustomAttributeLabel</MudText>
+            <MudText>@_activeItem.CustomAttribute</MudText>
+        </div>
+    </MudPaper>
+
+    @if (!_activeItem.HasStock)
+    {
+        <MudAlert Severity="Severity.Error" Class="mb-2">
+            Nessuna giacenza disponibile per questo articolo.
+        </MudAlert>
+    }
+
+    <BarcodeInput Label="Scan locazione prelievo" OnCodeScanned="OnPickLocationScanned" AutoFocus="true" />
+
+    @if (_pickLocation is not null)
+    {
+        <MudChip T="string" Color="Color.Info" Class="mb-2">Loc: @_pickLocation</MudChip>
+
+        <MudNumericField @bind-Value="_pickQty" Label="Quantità prelevata"
+                         Variant="Variant.Outlined"
+                         Min="0.001m" Max="@_activeItem.RemainingQty"
+                         Step="0.001m" Culture="@CultureInfo.CurrentCulture"
+                         Class="mb-3" AutoFocus="false" />
+
+        @if (_pickQty > _activeItem.RemainingQty)
+        {
+            <MudAlert Severity="Severity.Warning" Class="mb-2">
+                Quantità superiore al residuo (@_activeItem.RemainingQty).
+            </MudAlert>
+        }
+
+        <MudButton Variant="Variant.Filled" Color="Color.Success" FullWidth="true"
+                   Size="Size.Large" StartIcon="@Icons.Material.Filled.Check"
+                   Disabled="@(_pickQty <= 0 || _confirming)"
+                   OnClick="ConfirmPick">
+            @if (_confirming) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else { <span>CONFERMA PRELIEVO</span> }
+        </MudButton>
+    }
+}
+
+@code {
+    private enum SortMode { MainLoc, BestStock, Custom }
+
+    private List<PickListV2Dto> _lists = [];
+    private PickListV2Dto? _list;
+    private PickListV2ItemDto? _activeItem;
+    private SortMode _sortMode = SortMode.MainLoc;
+    private bool _hideCompleted = true;
+    private string? _pickLocation;
+    private decimal _pickQty = 1;
+    private bool _confirming;
+
+    private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    private IEnumerable<PickListV2ItemDto> SortedItems
+    {
+        get
+        {
+            var items = _list!.Items.AsEnumerable();
+            if (_hideCompleted) items = items.Where(i => i.Status != PickStatus.Completed);
+            return _sortMode switch
+            {
+                SortMode.BestStock => items.OrderByDescending(i => i.BestStockQty),
+                SortMode.Custom    => items.OrderBy(i => i.CustomAttribute),
+                _                  => items.OrderBy(i => i.MainLocationCode)
+            };
+        }
+    }
+
+    protected override void OnInitialized()
+    {
+        Session.SetPageTitle("Prelievo da Lista");
+        _lists = Wms.GetPickListsV2();
+    }
+
+    private void OnListBarcode(string code)
+    {
+        var found = _lists.FirstOrDefault(l =>
+            l.Code.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (found is not null) SelectList(found);
+        else Snackbar.Add($"Lista {code} non trovata", Severity.Error);
+    }
+
+    private void SelectList(PickListV2Dto l) { _list = l; _activeItem = null; }
+
+    private void OnItemBarcode(string code)
+    {
+        var item = _list!.Items.FirstOrDefault(i =>
+            i.ArticleCode.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase)
+            && i.Status != PickStatus.Completed);
+        if (item is not null) SelectItem(item);
+        else Snackbar.Add($"Articolo {code} non trovato o già completato", Severity.Warning);
+    }
+
+    private void SelectItem(PickListV2ItemDto item)
+    {
+        if (item.Status == PickStatus.Completed) return;
+        _activeItem  = item;
+        _pickLocation = null;
+        _pickQty      = item.RemainingQty;
+    }
+
+    private void OnPickLocationScanned(string code) => _pickLocation = code.Trim().ToUpper();
+
+    private async Task ConfirmPick()
+    {
+        if (_list is null || _activeItem is null || _pickLocation is null) return;
+        _confirming = true;
+        await Task.Delay(300);
+
+        var (ok, msg) = Wms.PickListV2Item(_list.Code, _activeItem.Id, _pickQty, _pickLocation, Session.OperatorCode!);
+        if (ok)
+        {
+            Snackbar.Add(msg, Severity.Success);
+            _activeItem = null;
+        }
+        else Snackbar.Add(msg, Severity.Error);
+
+        _confirming = false;
+    }
+}

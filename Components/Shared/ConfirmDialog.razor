@@ -1,0 +1,17 @@
+<MudDialog>
+    <DialogContent>
+        <MudText>@Message</MudText>
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="Cancel" Variant="Variant.Text">Annulla</MudButton>
+        <MudButton OnClick="Confirm" Variant="Variant.Filled" Color="Color.Error">Conferma</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public string Message { get; set; } = "";
+
+    private void Confirm() => MudDialog.Close(DialogResult.Ok(true));
+    private void Cancel()  => MudDialog.Cancel();
+}

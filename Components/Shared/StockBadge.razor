@@ -1,0 +1,20 @@
+@* Badge giacenza colorato: verde/giallo/rosso/viola *@
+
+<MudChip T="string"
+         Size="@Size"
+         Class="@($"wms-code-chip {CssClass} ml-1")"
+         Style="font-weight:700;">
+    @Quantity.ToString("N0") @UoM
+</MudChip>
+
+@code {
+    [Parameter] public decimal Quantity { get; set; }
+    [Parameter] public decimal MinStock { get; set; }
+    [Parameter] public string UoM { get; set; } = "PZ";
+    [Parameter] public Size Size { get; set; } = Size.Medium;
+
+    private string CssClass => Quantity < 0 ? "stock-neg"
+                             : Quantity == 0 ? "stock-zero"
+                             : Quantity <= MinStock ? "stock-low"
+                             : "stock-ok";
+}

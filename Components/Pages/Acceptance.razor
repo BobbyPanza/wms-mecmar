@@ -1,0 +1,251 @@
+@page "/acceptance"
+
+@using System.Globalization
+@inject SessionService Session
+@inject MockWmsService Wms
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+
+<PageTitle>Accettazione</PageTitle>
+
+@if (_doc is null)
+{
+    @* ─── Scan documento o articolo ───────────────────────────────────────── *@
+    <MudText Typo="Typo.h6" Class="mb-1">Scansiona documento o articolo</MudText>
+    <MudText Typo="Typo.caption" Style="color:#94A3B8;" Class="mb-3">
+        Barcode DDT / OA oppure codice articolo in arrivo
+    </MudText>
+
+    <BarcodeInput Label="Scan DDT / articolo" OnCodeScanned="OnDocOrArticleScanned" AutoFocus="true" />
+
+    @* Lista documenti aperti *@
+    <MudText Typo="Typo.subtitle2" Class="mt-4 mb-2" Style="color:#93C0DC;">
+        Documenti aperti
+    </MudText>
+    @foreach (var d in _docs)
+    {
+        var done = d.Items.Count(i => i.Status == AcceptanceStatus.Done);
+        <MudPaper Elevation="2" Class="pa-3 mb-2" Style="border-radius:10px;cursor:pointer;"
+                  @onclick="() => SelectDoc(d)">
+            <div class="d-flex justify-space-between align-start">
+                <div>
+                    <MudText Style="font-family:monospace;font-weight:700;">@d.DocumentRef</MudText>
+                    <MudText Typo="Typo.body2" Style="color:#94A3B8;">@d.SupplierName</MudText>
+                    <MudText Typo="Typo.caption" Style="color:#64748B;">@d.DocumentDate.ToString("dd/MM/yyyy")</MudText>
+                </div>
+                <MudChip T="string" Size="Size.Small"
+                         Color="@(done == d.Items.Count ? Color.Success : Color.Warning)">
+                    @done/@d.Items.Count
+                </MudChip>
+            </div>
+            <MudProgressLinear Value="@(d.Items.Count > 0 ? (double)done / d.Items.Count * 100 : 0)"
+                               Color="Color.Success" Rounded="true" Size="Size.Small" Class="mt-2" />
+        </MudPaper>
+    }
+}
+else if (_activeItem is null)
+{
+    @* ─── Articoli del documento ──────────────────────────────────────────── *@
+    <div class="d-flex align-center mb-3 gap-2">
+        <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                       OnClick="() => _doc = null" />
+        <div>
+            <MudText Style="font-family:monospace;font-weight:700;">@_doc.DocumentRef</MudText>
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_doc.SupplierName</MudText>
+        </div>
+    </div>
+
+    <BarcodeInput Label="Scan articolo" OnCodeScanned="OnArticleScanned" AutoFocus="true" />
+
+    @foreach (var item in _doc.Items)
+    {
+        var bg = item.Status == AcceptanceStatus.Done ? "#1e2d20" : "#1e2a40";
+        var borderColor = item.Status == AcceptanceStatus.Done    ? "#4FAB5B"
+                        : item.Status == AcceptanceStatus.Partial ? "#D4891A"
+                        : "#5B9BD5";
+        <MudPaper Elevation="1" Class="pa-3 mb-2"
+                  Style="@($"border-radius:8px;background:{bg};border-left:4px solid {borderColor};cursor:{(item.Status==AcceptanceStatus.Done?"default":"pointer")};")"
+                  @onclick="() => SelectItem(item)">
+            <div class="d-flex align-start justify-space-between">
+                <div style="min-width:0;flex:1;">
+                    <div class="d-flex align-center gap-1">
+                        <MudText Style="font-weight:700;font-family:monospace;">@item.ArticleCode</MudText>
+                        <ArticleInfoButton ArticleCode="@item.ArticleCode" />
+                    </div>
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;word-break:break-word;">@item.ArticleDesc</MudText>
+                    @if (item.DestLocation is not null)
+                    {
+                        <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.LocationOn" Color="Color.Success" Class="mt-1">
+                            @item.DestLocation
+                        </MudChip>
+                    }
+                </div>
+                <div class="d-flex flex-column align-end ml-2">
+                    @if (item.Status == AcceptanceStatus.Done)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                    }
+                    else
+                    {
+                        <MudText Style="font-weight:700;color:#5B9BD5;white-space:nowrap;">
+                            @item.AcceptedQty / @item.ExpectedQty @item.UoM
+                        </MudText>
+                    }
+                </div>
+            </div>
+        </MudPaper>
+    }
+
+    @if (_doc.Items.All(i => i.Status == AcceptanceStatus.Done))
+    {
+        <MudAlert Severity="Severity.Success" Class="mt-3" Icon="@Icons.Material.Filled.CheckCircle">
+            Documento completamente accettato!
+        </MudAlert>
+    }
+}
+else
+{
+    @* ─── Accettazione singolo articolo ───────────────────────────────────── *@
+    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
+                   OnClick="() => _activeItem = null" Class="mb-2" />
+
+    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2a40;">
+        <div class="d-flex align-center gap-1 mb-1">
+            <MudText Style="font-weight:700;font-family:monospace;font-size:1.1rem;">@_activeItem.ArticleCode</MudText>
+            <ArticleInfoButton ArticleCode="@_activeItem.ArticleCode" />
+        </div>
+        <MudText Typo="Typo.body2" Style="color:#94A3B8;">@_activeItem.ArticleDesc</MudText>
+        <MudDivider Class="my-2" />
+        <div class="d-flex justify-space-between mb-1">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Atteso</MudText>
+            <MudText Style="font-weight:700;">@_activeItem.ExpectedQty @_activeItem.UoM</MudText>
+        </div>
+        <div class="d-flex justify-space-between">
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Residuo</MudText>
+            <MudText Style="font-weight:700;color:#5B9BD5;">@QtyFmt(_activeItem.RemainingQty) @_activeItem.UoM</MudText>
+        </div>
+    </MudPaper>
+
+    <MudText Typo="Typo.subtitle2" Class="mb-1" Style="color:#93C0DC;">Locazione destinazione</MudText>
+    <BarcodeInput Label="Scan locazione" OnCodeScanned="OnDestScanned" AutoFocus="true" />
+
+    @if (_destLocation is not null)
+    {
+        <MudChip T="string" Color="Color.Success" Class="mb-2">→ @_destLocation</MudChip>
+
+        <MudNumericField @bind-Value="_acceptQty" Label="Quantità accettata"
+                         Variant="Variant.Outlined"
+                         Min="0.001m" Max="@_activeItem.RemainingQty"
+                         Step="1m" Class="mb-3" />
+
+        @* Riepilogo *@
+        <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2d24;">
+            <MudText Typo="Typo.subtitle2" Class="mb-1" Style="color:#93C0DC;">RIEPILOGO</MudText>
+            <div class="d-flex justify-space-between mb-1">
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;">Articolo</MudText>
+                <MudText Style="font-weight:700;font-family:monospace;">@_activeItem.ArticleCode</MudText>
+            </div>
+            <div class="d-flex justify-space-between mb-1">
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;">Quantità</MudText>
+                <MudText Style="font-weight:700;color:#5B9BD5;">@_acceptQty @_activeItem.UoM</MudText>
+            </div>
+            <div class="d-flex justify-space-between mb-1">
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;">Destinazione</MudText>
+                <MudText Style="font-family:monospace;">@_destLocation</MudText>
+            </div>
+            <div class="d-flex justify-space-between">
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;">Documento</MudText>
+                <MudText Style="font-family:monospace;">@_doc!.DocumentRef</MudText>
+            </div>
+        </MudPaper>
+
+        <MudButton Variant="Variant.Filled" Color="Color.Success" FullWidth="true"
+                   Size="Size.Large" StartIcon="@Icons.Material.Filled.Check"
+                   Disabled="@(_acceptQty <= 0 || _confirming)"
+                   OnClick="ConfirmAcceptance">
+            @if (_confirming) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else { <span>ACCETTA E CARICA</span> }
+        </MudButton>
+    }
+}
+
+@code {
+    private List<AcceptanceDocDto> _docs = [];
+    private AcceptanceDocDto? _doc;
+    private AcceptanceItemDto? _activeItem;
+    private string? _destLocation;
+    private decimal _acceptQty = 1;
+    private bool _confirming;
+
+    private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    protected override void OnInitialized()
+    {
+        Session.SetPageTitle("Accettazione");
+        _docs = Wms.GetAcceptanceDocs();
+    }
+
+    private void OnDocOrArticleScanned(string code)
+    {
+        // Prova prima come documento
+        var doc = Wms.GetAcceptanceDoc(code);
+        if (doc is not null) { SelectDoc(doc); return; }
+
+        // Poi come articolo — cerca il documento che contiene quell'articolo
+        var docByArt = Wms.FindDocByArticle(code);
+        if (docByArt is not null)
+        {
+            SelectDoc(docByArt);
+            var item = docByArt.Items.FirstOrDefault(i =>
+                i.ArticleCode.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (item is not null) SelectItem(item);
+            return;
+        }
+
+        Snackbar.Add($"Nessun documento trovato per '{code}'", Severity.Warning);
+    }
+
+    private void OnArticleScanned(string code)
+    {
+        var item = _doc!.Items.FirstOrDefault(i =>
+            i.ArticleCode.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase)
+            && i.Status != AcceptanceStatus.Done);
+        if (item is not null) SelectItem(item);
+        else Snackbar.Add($"Articolo {code} non trovato o già completato", Severity.Warning);
+    }
+
+    private void SelectDoc(AcceptanceDocDto d)
+    {
+        _doc = d; _activeItem = null;
+        Session.SetPrintContext("ACCEPTANCE", new() { ["DOCRIF"] = d.DocumentRef, ["SUPPLIER"] = d.SupplierName });
+    }
+
+    private void SelectItem(AcceptanceItemDto item)
+    {
+        if (item.Status == AcceptanceStatus.Done) return;
+        _activeItem   = item;
+        _destLocation = item.DestLocation;
+        _acceptQty    = item.RemainingQty;
+    }
+
+    private void OnDestScanned(string code) => _destLocation = code.Trim().ToUpper();
+
+    private async Task ConfirmAcceptance()
+    {
+        if (_doc is null || _activeItem is null || _destLocation is null) return;
+        _confirming = true;
+        await Task.Delay(300);
+
+        var (ok, msg) = Wms.ExecuteAcceptance(_doc.DocumentRef, _activeItem.Id,
+            _acceptQty, _destLocation, Session.OperatorCode!);
+
+        if (ok)
+        {
+            Snackbar.Add(msg, Severity.Success);
+            _activeItem = null;
+        }
+        else Snackbar.Add(msg, Severity.Error);
+
+        _confirming = false;
+    }
+}

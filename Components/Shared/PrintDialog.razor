@@ -1,0 +1,165 @@
+@inject LogicService Logic
+@inject PrintService Printer
+@inject SessionService Session
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudIcon Icon="@Icons.Material.Filled.Print" Color="Color.Primary" />
+            <MudText Typo="Typo.h6">Stampa — @Session.PrintContext</MudText>
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+        @if (_loading)
+        {
+            <div class="d-flex justify-center my-4">
+                <MudProgressCircular Indeterminate="true" Color="Color.Primary" />
+            </div>
+        }
+        else if (_templates.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info">
+                Nessun template configurato per il contesto <strong>@Session.PrintContext</strong>.<br />
+                Aggiungere righe in <code>WMS_PrintTemplate</code> con Context = '@Session.PrintContext'.
+            </MudAlert>
+        }
+        else
+        {
+            @* ─── Selezione template ─────────────────────────────────────────── *@
+            @if (_templates.Count > 1)
+            {
+                <MudSelect T="PrintTemplate" @bind-Value="_selected" Label="Report"
+                           Variant="Variant.Outlined" Class="mb-3"
+                           ToStringFunc="@(t => t?.Name ?? string.Empty)">
+                    @foreach (var t in _templates)
+                    {
+                        <MudSelectItem Value="@t">@t.Name</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            else
+            {
+                <MudText Typo="Typo.subtitle2" Class="mb-3" Style="color:#94A3B8;">
+                    Report: <strong style="color:#E2E8F0;">@_selected?.Name</strong>
+                </MudText>
+            }
+
+            @* ─── Parametri ──────────────────────────────────────────────────── *@
+            @if (_selected is not null)
+            {
+                @foreach (var p in _selected.Params.OrderBy(x => x.SortOrder))
+                {
+                    var isAuto = p.AutoFillKey is not null &&
+                                 Session.PrintAutoFill.ContainsKey(p.AutoFillKey);
+                    <MudTextField @bind-Value="_paramValues[p.ParamName]"
+                                  Label="@p.Label"
+                                  Variant="Variant.Outlined"
+                                  Class="mb-2"
+                                  ReadOnly="@isAuto"
+                                  Adornment="@(isAuto ? Adornment.End : Adornment.None)"
+                                  AdornmentIcon="@(isAuto ? Icons.Material.Filled.AutoAwesome : null)"
+                                  AdornmentColor="Color.Success" />
+                }
+
+                @if (!Printer.IsConfigured)
+                {
+                    <MudAlert Severity="Severity.Warning" Class="mt-2">
+                        Servizio stampa non configurato — impostare <code>PrintService:IntesiPrinterManagerUrl</code> o <code>PrintService:BaseUrl</code> in appsettings.
+                    </MudAlert>
+                }
+            }
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel" Variant="Variant.Text">Annulla</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.Print"
+                   Disabled="@(_selected is null || _printing || !Printer.IsConfigured)"
+                   OnClick="DoPrint">
+            @if (_printing) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else            { <span>STAMPA</span> }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    private List<PrintTemplate> _templates = [];
+    private PrintTemplate? _selected;
+    private Dictionary<string, string> _paramValues = new();
+    private bool _loading = true;
+    private bool _printing;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Logic.IsConfigured) { _loading = false; return; }
+
+        try
+        {
+            _templates = await Logic.GetPrintTemplatesAsync(Session.PrintContext);
+        }
+        catch { _templates = []; }
+
+        if (_templates.Count > 0)
+        {
+            _selected = _templates[0];
+            BuildParamValues();
+        }
+
+        _loading = false;
+    }
+
+    private void BuildParamValues()
+    {
+        _paramValues = new();
+        if (_selected is null) return;
+        foreach (var p in _selected.Params)
+        {
+            var val = "";
+            if (p.AutoFillKey is not null && Session.PrintAutoFill.TryGetValue(p.AutoFillKey, out var af))
+                val = af;
+            _paramValues[p.ParamName] = val;
+        }
+    }
+
+    // Quando cambia il template selezionato, ricalcola i parametri
+    private PrintTemplate? _prevSelected;
+    protected override void OnParametersSet()
+    {
+        if (_selected != _prevSelected)
+        {
+            _prevSelected = _selected;
+            BuildParamValues();
+        }
+    }
+
+    private async Task DoPrint()
+    {
+        if (_selected is null) return;
+        _printing = true;
+
+        var (ok, msg) = await Printer.PrintAsync(
+            _selected,
+            Session.OperatorCode ?? "",
+            Session.PageTitle,
+            new Dictionary<string, string>(_paramValues));
+
+        if (ok)
+        {
+            Snackbar.Add(msg, Severity.Success);
+            MudDialog.Close(DialogResult.Ok(true));
+        }
+        else
+        {
+            Snackbar.Add(msg, Severity.Error);
+        }
+
+        _printing = false;
+    }
+
+    private void Cancel() => MudDialog.Cancel();
+}
