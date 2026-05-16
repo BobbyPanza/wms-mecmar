@@ -682,22 +682,25 @@ public class ErpService
             var rows = (await db.QueryAsync<PickListRow>(
                 @"SELECT OLCOD, PACOD, PADSC, PAUDM,
                          Handling, Ubicazione, Giacenza,
-                         QtaDaPrelevare, CONUM, LOCOD
+                         QtaDaPrelevare, QtaPrelevata, CONUM, LOCOD
                   FROM dbo.WMS_V_PickList
                   WHERE OLCOD = @OlCod
                   ORDER BY Handling, PADSC",
                 new { OlCod = olCod.Trim().ToUpper() })).ToList();
 
-            return rows.Select((r, i) => new PickListRowDto
-            {
-                ArticleCode      = r.PACOD ?? "",
-                ArticleDesc      = r.PADSC ?? "",
-                UoM              = r.PAUDM ?? "",
-                PlannedQty       = r.QtaDaPrelevare,
-                OlCod            = r.OLCOD,
-                Handling         = r.Handling ?? "",
-                MainLocationCode = r.Ubicazione ?? ""
-            }).ToList();
+            return rows
+                .Select((r, i) => new PickListRowDto
+                {
+                    ArticleCode      = r.PACOD ?? "",
+                    ArticleDesc      = r.PADSC ?? "",
+                    UoM              = r.PAUDM ?? "",
+                    PlannedQty       = Math.Max(0, r.QtaDaPrelevare - r.QtaPrelevata),
+                    OlCod            = r.OLCOD,
+                    Handling         = r.Handling ?? "",
+                    MainLocationCode = r.Ubicazione ?? ""
+                })
+                .Where(r => r.PlannedQty > 0)
+                .ToList();
         }
         catch (Exception ex)
         {
