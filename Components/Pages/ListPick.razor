@@ -78,6 +78,11 @@ else
             </MudText>
             <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_list.Description</MudText>
         </div>
+        <MudButton Variant="Variant.Outlined" Color="Color.Error" Size="Size.Small"
+                   StartIcon="@Icons.Material.Filled.Archive"
+                   OnClick="ChiudiLista">
+            Chiudi lista
+        </MudButton>
     </div>
 
     @* Toolbar: sort + switch *@
@@ -180,6 +185,13 @@ else
                    OnClick="PrelevaTutto"
                    Style="flex:1;">
             Preleva tutto
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Warning"
+                   StartIcon="@Icons.Material.Filled.Undo"
+                   Disabled="@(_executing || !HasStagedPicks)"
+                   OnClick="AnnullaStagedPicks"
+                   Style="flex:1;">
+            Annulla staged
         </MudButton>
         <MudButton Variant="Variant.Filled" Color="Color.Success"
                    StartIcon="@Icons.Material.Filled.PlayArrow"
@@ -344,6 +356,50 @@ else
             await RefreshRowsAsync();
             Snackbar.Add("Pick staged dalla locazione principale per tutti gli articoli disponibili",
                          Severity.Info);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _executing = false;
+    }
+
+    // ─── Chiudi lista ─────────────────────────────────────────────────────────
+
+    private async Task ChiudiLista()
+    {
+        var dlgConf = await Dialog.ShowAsync<ConfirmDialog>("Chiudi lista",
+            new DialogParameters<ConfirmDialog>
+            {
+                { x => x.Message, "Chiudere la lista? Non apparirà più tra quelle in corso." }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+        if ((await dlgConf.Result)?.Canceled == true) return;
+
+        try
+        {
+            await PickSvc.ClosePickListAsync(_list!.Id);
+            Snackbar.Add("Lista chiusa", Severity.Info);
+            await CloseList();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+    }
+
+    // ─── Annulla staged ───────────────────────────────────────────────────────
+
+    private async Task AnnullaStagedPicks()
+    {
+        var dlgConf = await Dialog.ShowAsync<ConfirmDialog>("Annulla prelievi staged",
+            new DialogParameters<ConfirmDialog>
+            {
+                { x => x.Message, "Eliminare tutti i prelievi non ancora sincronizzati? I prelievi già eseguiti rimarranno invariati." }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+        if ((await dlgConf.Result)?.Canceled == true) return;
+
+        _executing = true;
+        try
+        {
+            await PickSvc.CancelStagedPicksAsync(_list!.Id);
+            await RefreshRowsAsync();
+            Snackbar.Add("Prelievi staged eliminati", Severity.Info);
         }
         catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
         _executing = false;

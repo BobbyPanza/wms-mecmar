@@ -105,6 +105,12 @@ public class PickListService
     public Task RemoveStagedPickAsync(Guid pickId)
         => _logic.RemoveStagedPickAsync(pickId);
 
+    public Task CancelStagedPicksAsync(Guid listId)
+        => _logic.CancelStagedPicksForListAsync(listId);
+
+    public Task ClosePickListAsync(Guid listId)
+        => _logic.ClosePickListAsync(listId);
+
     public Task DeclareMissingAsync(Guid rowId)
         => _logic.SetRowMissingAsync(rowId, true);
 

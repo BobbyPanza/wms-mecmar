@@ -763,6 +763,24 @@ public class LogicService
         catch (Exception ex) { _log.LogError(ex, "RemoveStagedPickAsync {Id}", pickId); throw; }
     }
 
+    public async Task CancelStagedPicksForListAsync(Guid listId)
+    {
+        try
+        {
+            using var db = Open();
+            await db.ExecuteAsync(
+                @"DELETE p FROM dbo.WMS_PickListPick p
+                  JOIN dbo.WMS_PickListRow r ON r.Id = p.RowId
+                  WHERE r.ListId = @ListId AND p.ExecutedAt IS NULL",
+                new { ListId = listId });
+            var rowIds = (await db.QueryAsync<Guid>(
+                "SELECT Id FROM dbo.WMS_PickListRow WHERE ListId=@ListId", new { ListId = listId })).ToList();
+            foreach (var rid in rowIds)
+                await UpdateListStatus(db, rid);
+        }
+        catch (Exception ex) { _log.LogError(ex, "CancelStagedPicksForListAsync {ListId}", listId); throw; }
+    }
+
     public async Task SetRowMissingAsync(Guid rowId, bool missing)
     {
         try
@@ -819,6 +837,18 @@ public class LogicService
             await UpdateListStatus(db, rowId);
         }
         catch (Exception ex) { _log.LogError(ex, "MarkPickExecutedAsync {Id}", pickId); throw; }
+    }
+
+    public async Task ClosePickListAsync(Guid listId)
+    {
+        try
+        {
+            using var db = Open();
+            await db.ExecuteAsync(
+                "UPDATE dbo.WMS_PickList SET Status='Closed', ClosedAt=GETDATE() WHERE Id=@Id",
+                new { Id = listId });
+        }
+        catch (Exception ex) { _log.LogError(ex, "ClosePickListAsync {Id}", listId); throw; }
     }
 
     public async Task UpdatePickListStatusAsync(Guid listId)
