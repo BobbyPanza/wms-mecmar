@@ -1,0 +1,80 @@
+@using System.Globalization
+@inject ErpService Erp
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Aggiungi riga fuori lista</MudText>
+    </TitleContent>
+
+    <DialogContent>
+
+        <BarcodeInput Label="Codice articolo" OnCodeScanned="OnArticleScanned" AutoFocus="true" />
+
+        @if (!string.IsNullOrEmpty(_desc))
+        {
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;display:block;margin-bottom:8px;">
+                @_desc
+            </MudText>
+        }
+
+        <MudNumericField @bind-Value="_qty" Label="Quantità"
+                         Variant="Variant.Outlined"
+                         Min="0.001m" Step="1m"
+                         Culture="@CultureInfo.CurrentCulture"
+                         Class="mb-3" />
+
+        @if (AvailableOlCods.Count > 0)
+        {
+            <MudSelect T="string" @bind-Value="_olCod"
+                       Label="Collega a bolla" Variant="Variant.Outlined"
+                       Clearable="true" Class="mb-3">
+                @foreach (var ol in AvailableOlCods)
+                {
+                    <MudSelectItem Value="@ol">@ol</MudSelectItem>
+                }
+            </MudSelect>
+        }
+
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel">Annulla</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   Disabled="@(string.IsNullOrEmpty(_articleCode) || _qty <= 0)"
+                   OnClick="Confirm">
+            Aggiungi
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public List<string> AvailableOlCods { get; set; } = [];
+
+    private string  _articleCode = "";
+    private string  _desc        = "";
+    private string  _uom         = "";
+    private decimal _qty         = 1;
+    private string? _olCod;
+
+    private async Task OnArticleScanned(string code)
+    {
+        _articleCode = code.Trim();
+        if (!string.IsNullOrEmpty(_articleCode))
+        {
+            try
+            {
+                var art = await Erp.GetArticleAsync(_articleCode);
+                _desc = art?.Description ?? "";
+                _uom  = art?.UoM ?? "";
+            }
+            catch { _desc = ""; _uom = ""; }
+        }
+    }
+
+    private void Confirm() => MudDialog.Close(DialogResult.Ok(
+        new AddExtraRowResult(_articleCode, _desc, _uom, _qty, _olCod)));
+
+    private void Cancel() => MudDialog.Cancel();
+}

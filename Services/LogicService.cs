@@ -92,6 +92,60 @@ public class LogicService
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_InvCount_Session')
                     CREATE INDEX IX_WMS_InvCount_Session ON dbo.WMS_InvCount(SessionId);
 
+                IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_PickList')
+                CREATE TABLE dbo.WMS_PickList (
+                    Id          UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WMS_PickList PRIMARY KEY,
+                    Code        NVARCHAR(30)     NOT NULL,
+                    Description NVARCHAR(100)    NOT NULL DEFAULT '',
+                    Status      NVARCHAR(20)     NOT NULL DEFAULT 'Open',
+                    CreatedAt   DATETIME2        NOT NULL DEFAULT GETDATE(),
+                    CreatedByOp NVARCHAR(15)     NOT NULL DEFAULT '',
+                    ClosedAt    DATETIME2        NULL
+                );
+
+                IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_PickListRow')
+                CREATE TABLE dbo.WMS_PickListRow (
+                    Id               UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WMS_PickListRow PRIMARY KEY,
+                    ListId           UNIQUEIDENTIFIER NOT NULL,
+                    ArticleCode      NVARCHAR(20)     NOT NULL,
+                    ArticleDesc      NVARCHAR(200)    NOT NULL DEFAULT '',
+                    UoM              NVARCHAR(10)     NOT NULL DEFAULT '',
+                    PlannedQty       NUMERIC(18,6)    NOT NULL DEFAULT 0,
+                    OlCod            NVARCHAR(20)     NULL,
+                    Handling         NVARCHAR(80)     NULL,
+                    IdSpec           INT              NULL,
+                    IdGroup          INT              NULL,
+                    MainWarehouseCode NVARCHAR(15)    NOT NULL DEFAULT '',
+                    MainLocationCode  NVARCHAR(15)    NOT NULL DEFAULT '',
+                    IsMissing        BIT              NOT NULL DEFAULT 0,
+                    IsExtraItem      BIT              NOT NULL DEFAULT 0,
+                    RowStatus        NVARCHAR(20)     NOT NULL DEFAULT 'Pending',
+                    SortOrder        INT              NOT NULL DEFAULT 0,
+                    CONSTRAINT FK_WMS_PickListRow_List
+                        FOREIGN KEY (ListId) REFERENCES dbo.WMS_PickList(Id) ON DELETE CASCADE
+                );
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_PickListRow_List')
+                    CREATE INDEX IX_WMS_PickListRow_List ON dbo.WMS_PickListRow(ListId);
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_PickListRow_Article')
+                    CREATE INDEX IX_WMS_PickListRow_Article ON dbo.WMS_PickListRow(ArticleCode);
+
+                IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_PickListPick')
+                CREATE TABLE dbo.WMS_PickListPick (
+                    Id            UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WMS_PickListPick PRIMARY KEY,
+                    RowId         UNIQUEIDENTIFIER NOT NULL,
+                    PickedQty     NUMERIC(18,6)    NOT NULL DEFAULT 0,
+                    WarehouseCode NVARCHAR(15)     NOT NULL DEFAULT '',
+                    LocationCode  NVARCHAR(15)     NOT NULL,
+                    OperatorCode  NVARCHAR(15)     NOT NULL DEFAULT '',
+                    StagedAt      DATETIME2        NOT NULL DEFAULT GETDATE(),
+                    ExecutedAt    DATETIME2        NULL,
+                    ErpMovId      INT              NULL,
+                    CONSTRAINT FK_WMS_PickListPick_Row
+                        FOREIGN KEY (RowId) REFERENCES dbo.WMS_PickListRow(Id) ON DELETE CASCADE
+                );
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_PickListPick_Row')
+                    CREATE INDEX IX_WMS_PickListPick_Row ON dbo.WMS_PickListPick(RowId);
+
                 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_PrintTemplate')
                 CREATE TABLE dbo.WMS_PrintTemplate (
                     Id          INT IDENTITY(1,1) NOT NULL CONSTRAINT PK_WMS_PrintTemplate PRIMARY KEY,
@@ -537,6 +591,284 @@ public class LogicService
         }
     }
 
+    // ─── Liste di prelievo ────────────────────────────────────────────────────
+
+    public async Task<List<PickListHeaderDto>> GetPickListsAsync()
+    {
+        try
+        {
+            using var db = Open();
+            var rows = (await db.QueryAsync<PickListHeaderRow>(
+                @"SELECT l.Id, l.Code, l.Description, l.Status, l.CreatedAt, l.CreatedByOp,
+                         COUNT(r.Id)                                          AS TotalRows,
+                         SUM(CASE WHEN r.RowStatus = 'Completed' THEN 1 ELSE 0 END) AS CompletedRows,
+                         SUM(CASE WHEN r.IsMissing  = 1          THEN 1 ELSE 0 END) AS MissingRows
+                  FROM dbo.WMS_PickList l
+                  LEFT JOIN dbo.WMS_PickListRow r ON r.ListId = l.Id
+                  WHERE l.Status IN ('Open','InProgress')
+                  GROUP BY l.Id, l.Code, l.Description, l.Status, l.CreatedAt, l.CreatedByOp
+                  ORDER BY l.CreatedAt DESC")).ToList();
+
+            if (rows.Count == 0) return [];
+
+            var ids = rows.Select(r => r.Id).ToList();
+            var olCods = (await db.QueryAsync<(Guid ListId, string OlCod)>(
+                @"SELECT DISTINCT ListId, OlCod FROM dbo.WMS_PickListRow
+                  WHERE ListId IN @Ids AND OlCod IS NOT NULL",
+                new { Ids = ids })).ToList();
+
+            return rows.Select(r => new PickListHeaderDto(
+                r.Id, r.Code, r.Description, r.Status, r.CreatedAt, r.CreatedByOp,
+                r.TotalRows, r.CompletedRows, r.MissingRows,
+                olCods.Where(o => o.ListId == r.Id).Select(o => o.OlCod).ToList()
+            )).ToList();
+        }
+        catch (Exception ex) { _log.LogError(ex, "GetPickListsAsync"); throw; }
+    }
+
+    public async Task<Guid> CreatePickListAsync(string code, string description, string opCode)
+    {
+        try
+        {
+            var id = Guid.NewGuid();
+            using var db = Open();
+            await db.ExecuteAsync(
+                @"INSERT INTO dbo.WMS_PickList(Id, Code, Description, Status, CreatedByOp)
+                  VALUES (@Id, @Code, @Desc, 'Open', @Op)",
+                new { Id = id, Code = code, Desc = description, Op = opCode });
+            return id;
+        }
+        catch (Exception ex) { _log.LogError(ex, "CreatePickListAsync"); throw; }
+    }
+
+    public async Task AddPickListRowAsync(Guid listId, PickListRowDto row)
+    {
+        try
+        {
+            using var db = Open();
+            await db.ExecuteAsync(
+                @"INSERT INTO dbo.WMS_PickListRow
+                      (Id, ListId, ArticleCode, ArticleDesc, UoM, PlannedQty,
+                       OlCod, Handling, IdSpec, IdGroup,
+                       MainWarehouseCode, MainLocationCode,
+                       IsMissing, IsExtraItem, RowStatus, SortOrder)
+                  VALUES
+                      (@Id, @ListId, @ArticleCode, @ArticleDesc, @UoM, @PlannedQty,
+                       @OlCod, @Handling, @IdSpec, @IdGroup,
+                       @MainWh, @MainLc,
+                       0, @IsExtra, 'Pending', @SortOrder)",
+                new
+                {
+                    row.Id, ListId = listId,
+                    row.ArticleCode, row.ArticleDesc, row.UoM, row.PlannedQty,
+                    row.OlCod, row.Handling, row.IdSpec, row.IdGroup,
+                    MainWh = row.MainWarehouseCode, MainLc = row.MainLocationCode,
+                    IsExtra = row.IsExtraItem, row.SortOrder
+                });
+        }
+        catch (Exception ex) { _log.LogError(ex, "AddPickListRowAsync {Art}", row.ArticleCode); throw; }
+    }
+
+    public async Task<List<PickListRowDto>> GetPickListRowsAsync(Guid listId)
+    {
+        try
+        {
+            using var db = Open();
+            var rows = (await db.QueryAsync<PickListRowDbRow>(
+                @"SELECT Id, ListId, ArticleCode, ArticleDesc, UoM, PlannedQty,
+                         OlCod, Handling, IdSpec, IdGroup,
+                         MainWarehouseCode, MainLocationCode,
+                         IsMissing, IsExtraItem, RowStatus, SortOrder
+                  FROM dbo.WMS_PickListRow
+                  WHERE ListId = @ListId
+                  ORDER BY SortOrder, ArticleCode",
+                new { ListId = listId })).ToList();
+
+            if (rows.Count == 0) return [];
+
+            var rowIds = rows.Select(r => r.Id).ToList();
+            var picks = (await db.QueryAsync<PickDbRow>(
+                @"SELECT Id, RowId, PickedQty, WarehouseCode, LocationCode,
+                         OperatorCode, StagedAt, ExecutedAt, ErpMovId
+                  FROM dbo.WMS_PickListPick
+                  WHERE RowId IN @Ids
+                  ORDER BY StagedAt",
+                new { Ids = rowIds })).ToList();
+
+            return rows.Select(r =>
+            {
+                var dto = new PickListRowDto
+                {
+                    Id = r.Id, ListId = r.ListId,
+                    ArticleCode = r.ArticleCode, ArticleDesc = r.ArticleDesc, UoM = r.UoM,
+                    PlannedQty = r.PlannedQty, OlCod = r.OlCod,
+                    Handling = r.Handling ?? "", IdSpec = r.IdSpec, IdGroup = r.IdGroup,
+                    MainWarehouseCode = r.MainWarehouseCode ?? "",
+                    MainLocationCode  = r.MainLocationCode  ?? "",
+                    IsMissing   = r.IsMissing,
+                    IsExtraItem = r.IsExtraItem,
+                    SortOrder   = r.SortOrder,
+                    Picks = picks.Where(p => p.RowId == r.Id)
+                                 .Select(p => new StagedPickDto
+                                 {
+                                     Id = p.Id, RowId = p.RowId,
+                                     PickedQty    = p.PickedQty,
+                                     WarehouseCode = p.WarehouseCode ?? "",
+                                     LocationCode  = p.LocationCode,
+                                     OperatorCode  = p.OperatorCode ?? "",
+                                     StagedAt  = p.StagedAt,
+                                     ExecutedAt = p.ExecutedAt,
+                                     ErpMovId  = p.ErpMovId
+                                 }).ToList()
+                };
+                return dto;
+            }).ToList();
+        }
+        catch (Exception ex) { _log.LogError(ex, "GetPickListRowsAsync {ListId}", listId); throw; }
+    }
+
+    public async Task StagePickAsync(StagedPickDto pick)
+    {
+        try
+        {
+            using var db = Open();
+            await db.ExecuteAsync(
+                @"INSERT INTO dbo.WMS_PickListPick
+                      (Id, RowId, PickedQty, WarehouseCode, LocationCode, OperatorCode)
+                  VALUES
+                      (@Id, @RowId, @PickedQty, @Wh, @Lc, @Op)",
+                new { pick.Id, pick.RowId, pick.PickedQty,
+                      Wh = pick.WarehouseCode, Lc = pick.LocationCode, Op = pick.OperatorCode });
+
+            await UpdateListStatus(db, pick.RowId);
+        }
+        catch (Exception ex) { _log.LogError(ex, "StagePickAsync {RowId}", pick.RowId); throw; }
+    }
+
+    public async Task RemoveStagedPickAsync(Guid pickId)
+    {
+        try
+        {
+            using var db = Open();
+            var rowId = await db.ExecuteScalarAsync<Guid?>(
+                "SELECT RowId FROM dbo.WMS_PickListPick WHERE Id=@Id AND ExecutedAt IS NULL",
+                new { Id = pickId });
+            if (rowId is null) return;
+
+            await db.ExecuteAsync(
+                "DELETE FROM dbo.WMS_PickListPick WHERE Id=@Id AND ExecutedAt IS NULL",
+                new { Id = pickId });
+            await UpdateListStatus(db, rowId.Value);
+        }
+        catch (Exception ex) { _log.LogError(ex, "RemoveStagedPickAsync {Id}", pickId); throw; }
+    }
+
+    public async Task SetRowMissingAsync(Guid rowId, bool missing)
+    {
+        try
+        {
+            using var db = Open();
+            await db.ExecuteAsync(
+                "UPDATE dbo.WMS_PickListRow SET IsMissing=@M, RowStatus=@S WHERE Id=@Id",
+                new { M = missing, S = missing ? "Missing" : "Pending", Id = rowId });
+        }
+        catch (Exception ex) { _log.LogError(ex, "SetRowMissingAsync {Id}", rowId); throw; }
+    }
+
+    public async Task<List<(StagedPickDto Pick, string ArticleCode, string ArticleDesc,
+                             string UoM, string? OlCod)>>
+        GetPendingPicksForListAsync(Guid listId)
+    {
+        try
+        {
+            using var db = Open();
+            var rows = (await db.QueryAsync<PendingPickRow>(
+                @"SELECT p.Id, p.RowId, p.PickedQty, p.WarehouseCode, p.LocationCode,
+                         p.OperatorCode, p.StagedAt,
+                         r.ArticleCode, r.ArticleDesc, r.UoM, r.OlCod
+                  FROM dbo.WMS_PickListPick p
+                  JOIN dbo.WMS_PickListRow  r ON r.Id = p.RowId
+                  WHERE r.ListId = @ListId AND p.ExecutedAt IS NULL
+                  ORDER BY r.OlCod, r.ArticleCode",
+                new { ListId = listId })).ToList();
+
+            return rows.Select(r => (
+                new StagedPickDto
+                {
+                    Id = r.Id, RowId = r.RowId, PickedQty = r.PickedQty,
+                    WarehouseCode = r.WarehouseCode ?? "", LocationCode = r.LocationCode,
+                    OperatorCode = r.OperatorCode ?? "", StagedAt = r.StagedAt
+                },
+                r.ArticleCode, r.ArticleDesc, r.UoM, r.OlCod
+            )).ToList();
+        }
+        catch (Exception ex) { _log.LogError(ex, "GetPendingPicksForListAsync {ListId}", listId); throw; }
+    }
+
+    public async Task MarkPickExecutedAsync(Guid pickId, int erpMovId)
+    {
+        try
+        {
+            using var db = Open();
+            var rowId = await db.ExecuteScalarAsync<Guid>(
+                @"UPDATE dbo.WMS_PickListPick
+                  SET ExecutedAt=GETDATE(), ErpMovId=@Mov
+                  OUTPUT INSERTED.RowId
+                  WHERE Id=@Id",
+                new { Mov = erpMovId, Id = pickId });
+            await UpdateListStatus(db, rowId);
+        }
+        catch (Exception ex) { _log.LogError(ex, "MarkPickExecutedAsync {Id}", pickId); throw; }
+    }
+
+    public async Task UpdatePickListStatusAsync(Guid listId)
+    {
+        try
+        {
+            using var db = Open();
+            var counts = await db.QueryFirstOrDefaultAsync<(int Total, int Done, int Missing)>(
+                @"SELECT COUNT(*) Total,
+                         SUM(CASE WHEN RowStatus IN ('Completed','Missing') THEN 1 ELSE 0 END) Done,
+                         SUM(CASE WHEN IsMissing=1 THEN 1 ELSE 0 END) Missing
+                  FROM dbo.WMS_PickListRow WHERE ListId=@Id",
+                new { Id = listId });
+            var newStatus = counts == default ? "Open"
+                          : counts.Total == 0  ? "Open"
+                          : counts.Done == counts.Total ? "Completed"
+                          : "InProgress";
+            await db.ExecuteAsync(
+                @"UPDATE dbo.WMS_PickList SET Status=@S,
+                    ClosedAt=CASE WHEN @S='Completed' THEN GETDATE() ELSE NULL END
+                  WHERE Id=@Id",
+                new { S = newStatus, Id = listId });
+        }
+        catch (Exception ex) { _log.LogError(ex, "UpdatePickListStatusAsync {Id}", listId); throw; }
+    }
+
+    private async Task UpdateListStatus(SqlConnection db, Guid rowId)
+    {
+        var info = await db.QueryFirstOrDefaultAsync<(decimal Planned, decimal TotalPicked, bool Missing)>(
+            @"SELECT r.PlannedQty Planned,
+                     ISNULL(SUM(p.PickedQty),0) TotalPicked,
+                     r.IsMissing Missing
+              FROM dbo.WMS_PickListRow r
+              LEFT JOIN dbo.WMS_PickListPick p ON p.RowId=r.Id
+              WHERE r.Id=@Id GROUP BY r.PlannedQty, r.IsMissing",
+            new { Id = rowId });
+        if (info == default) return;
+        var rowStatus = info.Missing ? "Missing"
+                      : info.TotalPicked >= info.Planned ? "Completed"
+                      : info.TotalPicked > 0 ? "Partial"
+                      : "Pending";
+        await db.ExecuteAsync(
+            "UPDATE dbo.WMS_PickListRow SET RowStatus=@S WHERE Id=@Id",
+            new { S = rowStatus, Id = rowId });
+
+        var listId = await db.ExecuteScalarAsync<Guid>(
+            "SELECT ListId FROM dbo.WMS_PickListRow WHERE Id=@Id", new { Id = rowId });
+        await UpdatePickListStatusAsync(listId);
+    }
+
     // ─── Row type Dapper ──────────────────────────────────────────────────────
 
     private class InvSessionRow
@@ -561,6 +893,67 @@ public class LogicService
         public decimal  ExpectedQty   { get; set; }
         public decimal? CountedQty    { get; set; }
         public bool     Applied       { get; set; }
+    }
+
+    private class PickListHeaderRow
+    {
+        public Guid     Id            { get; set; }
+        public string   Code          { get; set; } = "";
+        public string   Description   { get; set; } = "";
+        public string   Status        { get; set; } = "";
+        public DateTime CreatedAt     { get; set; }
+        public string   CreatedByOp   { get; set; } = "";
+        public int      TotalRows     { get; set; }
+        public int      CompletedRows { get; set; }
+        public int      MissingRows   { get; set; }
+    }
+
+    private class PickListRowDbRow
+    {
+        public Guid     Id               { get; set; }
+        public Guid     ListId           { get; set; }
+        public string   ArticleCode      { get; set; } = "";
+        public string   ArticleDesc      { get; set; } = "";
+        public string   UoM              { get; set; } = "";
+        public decimal  PlannedQty       { get; set; }
+        public string?  OlCod            { get; set; }
+        public string?  Handling         { get; set; }
+        public int?     IdSpec           { get; set; }
+        public int?     IdGroup          { get; set; }
+        public string?  MainWarehouseCode { get; set; }
+        public string?  MainLocationCode  { get; set; }
+        public bool     IsMissing        { get; set; }
+        public bool     IsExtraItem      { get; set; }
+        public string   RowStatus        { get; set; } = "";
+        public int      SortOrder        { get; set; }
+    }
+
+    private class PickDbRow
+    {
+        public Guid      Id            { get; set; }
+        public Guid      RowId         { get; set; }
+        public decimal   PickedQty     { get; set; }
+        public string?   WarehouseCode { get; set; }
+        public string    LocationCode  { get; set; } = "";
+        public string?   OperatorCode  { get; set; }
+        public DateTime  StagedAt      { get; set; }
+        public DateTime? ExecutedAt    { get; set; }
+        public int?      ErpMovId      { get; set; }
+    }
+
+    private class PendingPickRow
+    {
+        public Guid     Id            { get; set; }
+        public Guid     RowId         { get; set; }
+        public decimal  PickedQty     { get; set; }
+        public string?  WarehouseCode { get; set; }
+        public string   LocationCode  { get; set; } = "";
+        public string?  OperatorCode  { get; set; }
+        public DateTime StagedAt      { get; set; }
+        public string   ArticleCode   { get; set; } = "";
+        public string   ArticleDesc   { get; set; } = "";
+        public string   UoM           { get; set; } = "";
+        public string?  OlCod         { get; set; }
     }
 
     private class CartDbRow

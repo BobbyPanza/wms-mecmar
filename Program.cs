@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.AspNetCore.HttpOverrides;
 using MudBlazor.Services;
 using WMS.Components;
+using WMS.Models;
 using WMS.Services;
 
 CultureInfo.DefaultThreadCurrentCulture = new CultureInfo("it-IT");
@@ -34,6 +35,9 @@ builder.Services.AddSingleton<ErpService>();
 
 // Singleton = accesso al DB Logic (carrello persistente, configurazione WMS)
 builder.Services.AddSingleton<LogicService>();
+
+// Singleton = servizio liste di prelievo (Logic DB + ERP)
+builder.Services.AddSingleton<PickListService>();
 
 // Singleton = servizio stampa (Intesi Printer Manager o legacy Crystal)
 builder.Services.AddHttpClient<PrintService>();

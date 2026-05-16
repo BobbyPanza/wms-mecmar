@@ -1,0 +1,269 @@
+@using System.Globalization
+@inject PickListService PickSvc
+@inject ISnackbar Snackbar
+
+<MudDialog>
+    <TitleContent>
+        <div class="d-flex align-center gap-2">
+            <MudText Style="font-family:monospace;font-weight:700;">@Row.ArticleCode</MudText>
+            <ArticleInfoButton ArticleCode="@Row.ArticleCode" />
+        </div>
+    </TitleContent>
+
+    <DialogContent>
+
+        @* ─── Qty riepilogo ──────────────────────────────────────────────────── *@
+        <div class="d-flex gap-3 mb-3">
+            <div style="flex:1;text-align:center;background:#1e2a40;border-radius:8px;padding:10px 4px;">
+                <div style="color:#94A3B8;font-size:.72rem;">Da prelevare</div>
+                <div style="font-weight:700;font-size:1.1rem;color:#5B9BD5;">
+                    @Fmt(Row.RemainingQty) @Row.UoM
+                </div>
+            </div>
+            <div style="flex:1;text-align:center;background:#1e2a40;border-radius:8px;padding:10px 4px;">
+                <div style="color:#94A3B8;font-size:.72rem;">Staged</div>
+                <div style="font-weight:700;font-size:1.1rem;color:#D4891A;">
+                    @Fmt(Row.StagedQty)
+                </div>
+            </div>
+            <div style="flex:1;text-align:center;background:#1e2a40;border-radius:8px;padding:10px 4px;">
+                <div style="color:#94A3B8;font-size:.72rem;">Eseguito</div>
+                <div style="font-weight:700;font-size:1.1rem;color:#4CAF50;">
+                    @Fmt(Row.ExecutedQty)
+                </div>
+            </div>
+        </div>
+
+        @* ─── Prelievi già presenti ───────────────────────────────────────────── *@
+        @if (Row.Picks.Count > 0)
+        {
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;display:block;margin-bottom:4px;">
+                Prelievi (@Row.Picks.Count)
+            </MudText>
+            <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;padding-bottom:4px;">
+                @foreach (var pick in Row.Picks)
+                {
+                    <div style="min-width:110px;background:@(pick.IsExecuted ? "#1e3020" : "#2a2a10");
+                                border-radius:8px;padding:6px 10px;flex-shrink:0;position:relative;">
+                        <div style="font-family:monospace;font-size:.78rem;font-weight:600;">
+                            @pick.LocationCode
+                        </div>
+                        <div style="color:#5B9BD5;font-weight:700;">@Fmt(pick.PickedQty)</div>
+                        <div style="font-size:.65rem;color:#64748B;">
+                            @(pick.IsExecuted ? "✓ eseguito" : "staged")
+                        </div>
+                        @if (!pick.IsExecuted)
+                        {
+                            <MudIconButton Icon="@Icons.Material.Filled.Close"
+                                           Size="Size.Small" Color="Color.Error"
+                                           Style="position:absolute;top:2px;right:2px;min-width:0;padding:2px;"
+                                           OnClick="() => RemovePick(pick)" />
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @* ─── Locazioni con giacenza ──────────────────────────────────────────── *@
+        @if (Row.Locations.Count > 0)
+        {
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;display:block;margin-bottom:4px;">
+                Giacenze
+            </MudText>
+            <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;padding-bottom:4px;">
+                @foreach (var loc in Row.Locations.OrderByDescending(l => l.Quantity))
+                {
+                    <MudChip T="string" Size="Size.Small"
+                             Color="@(loc.IsMainWithdrawal ? Color.Primary : Color.Default)"
+                             Icon="@(loc.IsMainWithdrawal ? Icons.Material.Filled.Star : Icons.Material.Filled.LocationOn)"
+                             OnClick="() => SelectLocation(loc.LocationCode, loc.WarehouseCode)">
+                        @loc.LocationCode (@Fmt(loc.Quantity))
+                    </MudChip>
+                }
+            </div>
+        }
+        else if (!Row.HasStock)
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mb-3">
+                Nessuna giacenza disponibile per questo articolo.
+            </MudAlert>
+        }
+
+        @* ─── Form nuovo prelievo ─────────────────────────────────────────────── *@
+        @if (!Row.IsMissing && Row.RemainingQty > 0)
+        {
+            <BarcodeInput Label="Scan locazione" OnCodeScanned="OnLocationScanned" AutoFocus="true" />
+
+            @if (!string.IsNullOrEmpty(_location))
+            {
+                <MudChip T="string" Color="Color.Info" Class="mb-2">
+                    Loc: @_location
+                </MudChip>
+            }
+
+            <MudNumericField @bind-Value="_qty" Label="Quantità"
+                             Variant="Variant.Outlined"
+                             Min="0.001m" Max="@Row.PlannedQty"
+                             Step="1m" Culture="@CultureInfo.CurrentCulture"
+                             Class="mb-2" />
+
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
+                       Size="Size.Large" StartIcon="@Icons.Material.Filled.AddCircle"
+                       Disabled="@(_qty <= 0 || string.IsNullOrEmpty(_location) || _working)"
+                       OnClick="AddPick" Class="mb-2">
+                Aggiungi prelievo
+            </MudButton>
+
+            @if (!string.IsNullOrEmpty(Row.MainLocationCode))
+            {
+                <MudButton Variant="Variant.Outlined" Color="Color.Primary" FullWidth="true"
+                           Size="Size.Large" StartIcon="@Icons.Material.Filled.FlashOn"
+                           Disabled="@_working" OnClick="PrelievoAuto" Class="mb-2">
+                    Prelievo auto (@Row.MainLocationCode)
+                </MudButton>
+            }
+        }
+
+        @* ─── Azioni mancante ─────────────────────────────────────────────────── *@
+        @if (!Row.IsMissing)
+        {
+            <MudButton Variant="Variant.Outlined" Color="Color.Error" FullWidth="true"
+                       StartIcon="@Icons.Material.Filled.Block"
+                       Disabled="@_working" OnClick="SegnalaMancante">
+                Segnala mancante
+            </MudButton>
+        }
+        else
+        {
+            <MudAlert Severity="Severity.Error" Dense="true" Class="mb-2">
+                Articolo dichiarato mancante per @Fmt(Row.RemainingQty) @Row.UoM.
+            </MudAlert>
+            <MudButton Variant="Variant.Outlined" Color="Color.Default" FullWidth="true"
+                       StartIcon="@Icons.Material.Filled.Undo"
+                       Disabled="@_working" OnClick="AnnullaMancante">
+                Annulla mancante
+            </MudButton>
+        }
+
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Close">Chiudi</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+    [Parameter] public PickListRowDto Row          { get; set; } = default!;
+    [Parameter] public string         OperatorCode { get; set; } = "";
+
+    private string  _location = "";
+    private string  _warehouse = "";
+    private decimal _qty  = 1;
+    private bool    _working;
+    private bool    _changed;
+
+    protected override void OnParametersSet()
+        => _qty = Row.RemainingQty > 0 ? Row.RemainingQty : 1;
+
+    private static string Fmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    private void OnLocationScanned(string code)
+    {
+        _location  = code.Trim().ToUpper();
+        _warehouse = "";  // verrà determinato al momento del save
+    }
+
+    private void SelectLocation(string lc, string mg)
+    {
+        _location  = lc;
+        _warehouse = mg;
+    }
+
+    private async Task AddPick()
+    {
+        if (string.IsNullOrEmpty(_location) || _qty <= 0) return;
+        _working = true;
+        try
+        {
+            await PickSvc.StagePickAsync(Row.Id, _qty, _warehouse, _location, OperatorCode);
+            Row.Picks.Add(new StagedPickDto
+            {
+                Id = Guid.NewGuid(), RowId = Row.Id,
+                PickedQty = _qty, LocationCode = _location, WarehouseCode = _warehouse,
+                OperatorCode = OperatorCode, StagedAt = DateTime.Now
+            });
+            _location = ""; _warehouse = "";
+            _qty = Row.RemainingQty > 0 ? Row.RemainingQty : 1;
+            _changed = true;
+            Snackbar.Add($"Staged: {Fmt(_qty)} da {_location}", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _working = false;
+    }
+
+    private async Task PrelievoAuto()
+    {
+        if (string.IsNullOrEmpty(Row.MainLocationCode)) return;
+        _working = true;
+        try
+        {
+            await PickSvc.StagePickAsync(Row.Id, Row.RemainingQty,
+                                         Row.MainWarehouseCode, Row.MainLocationCode, OperatorCode);
+            Row.Picks.Add(new StagedPickDto
+            {
+                Id = Guid.NewGuid(), RowId = Row.Id,
+                PickedQty = Row.RemainingQty,
+                LocationCode = Row.MainLocationCode, WarehouseCode = Row.MainWarehouseCode,
+                OperatorCode = OperatorCode, StagedAt = DateTime.Now
+            });
+            _changed = true;
+            Snackbar.Add($"Auto-staged: {Fmt(Row.RemainingQty)} da {Row.MainLocationCode}",
+                         Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _working = false;
+    }
+
+    private async Task RemovePick(StagedPickDto pick)
+    {
+        _working = true;
+        try
+        {
+            await PickSvc.RemoveStagedPickAsync(pick.Id);
+            Row.Picks.Remove(pick);
+            _changed = true;
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _working = false;
+    }
+
+    private async Task SegnalaMancante()
+    {
+        _working = true;
+        try
+        {
+            await PickSvc.DeclareMissingAsync(Row.Id);
+            Row.IsMissing = true;
+            _changed = true;
+            Snackbar.Add("Articolo segnalato come mancante", Severity.Warning);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _working = false;
+    }
+
+    private async Task AnnullaMancante()
+    {
+        _working = true;
+        try
+        {
+            await PickSvc.UndoMissingAsync(Row.Id);
+            Row.IsMissing = false;
+            _changed = true;
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _working = false;
+    }
+
+    private void Close() => MudDialog.Close(DialogResult.Ok(_changed));
+}

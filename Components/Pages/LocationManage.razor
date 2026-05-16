@@ -1,0 +1,314 @@
+@page "/locations/manage"
+
+@inject SessionService Session
+@inject ErpService Erp
+@inject ISnackbar Snackbar
+
+<PageTitle>Gestione Locazioni</PageTitle>
+
+<MudTabs Elevation="0" Rounded="false" ApplyEffectsToContainer="true"
+         Color="Color.Primary" Class="mb-0" @bind-ActivePanelIndex="_tab">
+
+    @* ═══ Tab 1 — Crea Locazione ════════════════════════════════════════════ *@
+    <MudTabPanel Text="Crea Locazione" Icon="@Icons.Material.Filled.Add">
+        <div class="pt-3">
+
+            @if (!Erp.IsConfigured)
+            {
+                <MudAlert Severity="Severity.Warning">
+                    Database ERP non configurato. Impossibile creare locazioni.
+                </MudAlert>
+            }
+            else
+            {
+                <MudSelect T="string" @bind-Value="_newMgCod"
+                           Label="Magazzino" Variant="Variant.Outlined"
+                           Class="mb-3" AnchorOrigin="Origin.BottomLeft">
+                    @foreach (var mg in _warehouses)
+                    {
+                        <MudSelectItem Value="@mg">@mg</MudSelectItem>
+                    }
+                </MudSelect>
+
+                <MudTextField @bind-Value="_newLcCod"
+                              Label="Codice locazione"
+                              Variant="Variant.Outlined"
+                              Adornment="Adornment.Start"
+                              AdornmentIcon="@Icons.Material.Filled.LocationOn"
+                              Class="mb-3"
+                              @onkeydown="OnLcKeyDown" />
+
+                @if (_createError is not null)
+                {
+                    <MudAlert Severity="Severity.Error" Dense="true" Class="mb-3">
+                        @_createError
+                    </MudAlert>
+                }
+                @if (_createSuccess)
+                {
+                    <MudAlert Severity="Severity.Success" Dense="true" Class="mb-3">
+                        Locazione @_lastCreated creata.
+                    </MudAlert>
+                }
+
+                <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                           FullWidth="true" Size="Size.Large"
+                           StartIcon="@Icons.Material.Filled.AddLocation"
+                           Disabled="@(string.IsNullOrWhiteSpace(_newMgCod) || string.IsNullOrWhiteSpace(_newLcCod) || _working)"
+                           OnClick="CreateLocation">
+                    @if (_working) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+                    else { <span>Crea locazione</span> }
+                </MudButton>
+            }
+        </div>
+    </MudTabPanel>
+
+    @* ═══ Tab 2 — Abbina Articolo ════════════════════════════════════════════ *@
+    <MudTabPanel Text="Abbina Articolo" Icon="@Icons.Material.Filled.Link">
+        <div class="pt-3">
+
+            @if (!Erp.IsConfigured)
+            {
+                <MudAlert Severity="Severity.Warning">
+                    Database ERP non configurato.
+                </MudAlert>
+            }
+            else
+            {
+                <BarcodeInput Label="Codice articolo" OnCodeScanned="OnArticleScanned"
+                              AutoFocus="@(_tab == 1)" />
+
+                @if (_article is not null)
+                {
+                    @* Testata articolo *@
+                    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2a40;">
+                        <MudText Style="font-family:monospace;font-weight:700;">@_article.Code</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_article.Description</MudText>
+                    </MudPaper>
+
+                    @* Locazioni correnti *@
+                    @if (_artLocs.Count > 0)
+                    {
+                        <MudText Typo="Typo.subtitle2" Style="color:#93C0DC;" Class="mb-2">
+                            Locazioni abbinate
+                        </MudText>
+                        @foreach (var loc in _artLocs)
+                        {
+                            <MudPaper Elevation="1" Class="pa-3 mb-2"
+                                      Style="@($"border-radius:8px;background:{(loc.IsMain ? "#1a2e3a" : "#1e2a40")};")">
+                                <div class="d-flex align-center justify-space-between">
+                                    <div>
+                                        <div class="d-flex align-center gap-2">
+                                            <MudText Style="font-family:monospace;font-weight:700;">
+                                                @loc.LocationCode
+                                            </MudText>
+                                            @if (loc.IsMain)
+                                            {
+                                                <MudChip T="string" Size="Size.Small"
+                                                         Color="Color.Warning"
+                                                         Icon="@Icons.Material.Filled.Star">
+                                                    Principale
+                                                </MudChip>
+                                            }
+                                        </div>
+                                        <MudText Typo="Typo.caption" Style="color:#64748B;">
+                                            @loc.WarehouseCode — giacenza: @loc.CurrentQty.ToString("0.###")
+                                        </MudText>
+                                    </div>
+                                    <div class="d-flex gap-1">
+                                        @if (!loc.IsMain)
+                                        {
+                                            <MudIconButton Icon="@Icons.Material.Filled.Star"
+                                                           Size="Size.Small" Color="Color.Warning"
+                                                           Title="Imposta principale"
+                                                           OnClick="() => SetMain(loc)" />
+                                        }
+                                        <MudIconButton Icon="@Icons.Material.Filled.LinkOff"
+                                                       Size="Size.Small" Color="Color.Error"
+                                                       Title="@(loc.CurrentQty != 0 ? "Non rimuovibile: giacenza presente" : "Rimuovi abbinamento")"
+                                                       Disabled="@(loc.CurrentQty != 0 || _working)"
+                                                       OnClick="() => RemoveLoc(loc)" />
+                                    </div>
+                                </div>
+                            </MudPaper>
+                        }
+                    }
+                    else
+                    {
+                        <MudAlert Severity="Severity.Info" Dense="true" Class="mb-3">
+                            Nessuna locazione abbinata a questo articolo.
+                        </MudAlert>
+                    }
+
+                    @* Aggiunge nuova locazione *@
+                    <MudDivider Class="my-3" />
+                    <MudText Typo="Typo.subtitle2" Style="color:#93C0DC;" Class="mb-2">
+                        Aggiungi locazione
+                    </MudText>
+                    <div class="d-flex gap-2 mb-3">
+                        <MudSelect T="string" @bind-Value="_assignMgCod"
+                                   Label="Magazzino" Variant="Variant.Outlined"
+                                   Style="flex:1;" AnchorOrigin="Origin.BottomLeft">
+                            @foreach (var mg in _warehouses)
+                            {
+                                <MudSelectItem Value="@mg">@mg</MudSelectItem>
+                            }
+                        </MudSelect>
+                        <MudTextField @bind-Value="_assignLcCod"
+                                      Label="Locazione"
+                                      Variant="Variant.Outlined"
+                                      Style="flex:1;" />
+                    </div>
+                    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                               FullWidth="true" Size="Size.Large"
+                               StartIcon="@Icons.Material.Filled.AddLocation"
+                               Disabled="@(string.IsNullOrWhiteSpace(_assignMgCod) || string.IsNullOrWhiteSpace(_assignLcCod) || _working)"
+                               OnClick="AssignLocation">
+                        Abbina locazione
+                    </MudButton>
+                }
+            }
+        </div>
+    </MudTabPanel>
+
+</MudTabs>
+
+@code {
+    private int     _tab;
+    private bool    _working;
+
+    // ─── Crea locazione ───────────────────────────────────────────────────────
+    private List<string> _warehouses = [];
+    private string  _newMgCod    = "";
+    private string  _newLcCod    = "";
+    private string? _createError;
+    private bool    _createSuccess;
+    private string  _lastCreated = "";
+
+    // ─── Abbina articolo ──────────────────────────────────────────────────────
+    private ArticleDto?              _article;
+    private List<ManagedLocationDto> _artLocs = [];
+    private string  _assignMgCod = "";
+    private string  _assignLcCod = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        Session.SetPageTitle("Gestione Locazioni");
+        if (Erp.IsConfigured)
+        {
+            try { _warehouses = await Erp.GetAllWarehouseCodesAsync(); }
+            catch { Snackbar.Add("Errore caricamento magazzini", Severity.Error); }
+            if (_warehouses.Count > 0) _newMgCod = _warehouses[0];
+        }
+    }
+
+    // ─── Crea locazione ───────────────────────────────────────────────────────
+
+    private async Task OnLcKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await CreateLocation();
+    }
+
+    private async Task CreateLocation()
+    {
+        _createError = null; _createSuccess = false;
+        var lc = _newLcCod.Trim().ToUpper();
+        if (string.IsNullOrEmpty(_newMgCod) || string.IsNullOrEmpty(lc)) return;
+
+        _working = true;
+        try
+        {
+            if (await Erp.LocationExistsAsync(_newMgCod, lc))
+            {
+                _createError = $"La locazione {_newMgCod} / {lc} esiste già.";
+                _working = false;
+                return;
+            }
+            await Erp.CreateLocationAsync(_newMgCod, lc);
+            _lastCreated  = $"{_newMgCod} / {lc}";
+            _createSuccess = true;
+            _newLcCod     = "";
+            Snackbar.Add($"Locazione {_lastCreated} creata", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            _createError = ex.Message;
+            Snackbar.Add(ex.Message, Severity.Error);
+        }
+        _working = false;
+    }
+
+    // ─── Abbina articolo ──────────────────────────────────────────────────────
+
+    private async Task OnArticleScanned(string code)
+    {
+        _article = null; _artLocs = [];
+        try
+        {
+            _article = await Erp.GetArticleAsync(code.Trim());
+            if (_article is null)
+            {
+                Snackbar.Add($"{code}: articolo non trovato", Severity.Warning);
+                return;
+            }
+            await RefreshArtLocsAsync();
+            if (_warehouses.Count > 0) _assignMgCod = _warehouses[0];
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+    }
+
+    private async Task RefreshArtLocsAsync()
+    {
+        if (_article is null) return;
+        try { _artLocs = await Erp.GetArticleLocationsForMgmtAsync(_article.Code); }
+        catch { Snackbar.Add("Errore caricamento locazioni articolo", Severity.Error); }
+    }
+
+    private async Task SetMain(ManagedLocationDto loc)
+    {
+        _working = true;
+        try
+        {
+            await Erp.SetMainLocationAsync(_article!.Code, loc.WarehouseCode, loc.LocationCode);
+            await RefreshArtLocsAsync();
+            Snackbar.Add($"{loc.LocationCode} impostata come principale", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _working = false;
+    }
+
+    private async Task RemoveLoc(ManagedLocationDto loc)
+    {
+        _working = true;
+        try
+        {
+            var ok = await Erp.RemoveArticleLocationAsync(
+                _article!.Code, loc.WarehouseCode, loc.LocationCode);
+            if (ok)
+            {
+                await RefreshArtLocsAsync();
+                Snackbar.Add($"Abbinamento {loc.LocationCode} rimosso", Severity.Success);
+            }
+            else
+                Snackbar.Add($"Impossibile rimuovere {loc.LocationCode}: giacenza presente", Severity.Warning);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _working = false;
+    }
+
+    private async Task AssignLocation()
+    {
+        var lc = _assignLcCod.Trim().ToUpper();
+        if (string.IsNullOrEmpty(_assignMgCod) || string.IsNullOrEmpty(lc)) return;
+        _working = true;
+        try
+        {
+            await Erp.AssignArticleToLocationAsync(_article!.Code, _assignMgCod, lc);
+            _assignLcCod = "";
+            await RefreshArtLocsAsync();
+            Snackbar.Add($"Locazione {lc} abbinata a {_article!.Code}", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _working = false;
+    }
+}

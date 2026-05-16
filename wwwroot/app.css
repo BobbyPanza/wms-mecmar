@@ -184,6 +184,12 @@ html, body {
 .pick-item-done    { border-left: 4px solid var(--wms-success); opacity: 0.65; }
 .pick-item-active  { border-left: 4px solid var(--wms-primary); background: rgba(91,155,213,0.08); }
 
+/* Nuove liste prelievo — bordi colorati per stato staging */
+.pick-row-pending { border-left: 4px solid #455A64; }
+.pick-row-partial { border-left: 4px solid #F9A825; }
+.pick-row-done    { border-left: 4px solid #2E7D32; opacity: 0.75; }
+.pick-row-missing { border-left: 4px solid #B71C1C; }
+
 /* ─── Inventario ─────────────────────────────────────────────────────────── */
 
 .inv-row-pending { opacity: 0.85; }

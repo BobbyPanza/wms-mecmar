@@ -669,7 +669,237 @@ public class ErpService
         }
     }
 
+    // ─── Liste di prelievo (Pick List service) ───────────────────────────────
+
+    /// <summary>
+    /// Carica le righe da WMS_V_PickList per una bolla e le converte in PickListRowDto.
+    /// </summary>
+    public async Task<List<PickListRowDto>> GetPickListRowsForOlCodAsync(string olCod)
+    {
+        try
+        {
+            using var db = Open();
+            var rows = (await db.QueryAsync<PickListRow>(
+                @"SELECT OLCOD, PACOD, PADSC, PAUDM,
+                         Handling, Ubicazione, Giacenza,
+                         QtaDaPrelevare, CONUM, LOCOD
+                  FROM dbo.WMS_V_PickList
+                  WHERE OLCOD = @OlCod
+                  ORDER BY Handling, PADSC",
+                new { OlCod = olCod.Trim().ToUpper() })).ToList();
+
+            return rows.Select((r, i) => new PickListRowDto
+            {
+                ArticleCode      = r.PACOD ?? "",
+                ArticleDesc      = r.PADSC ?? "",
+                UoM              = r.PAUDM ?? "",
+                PlannedQty       = r.QtaDaPrelevare,
+                OlCod            = r.OLCOD,
+                Handling         = r.Handling ?? "",
+                MainLocationCode = r.Ubicazione ?? ""
+            }).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.GetPickListRowsForOlCodAsync {OlCod}", olCod);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Giacenze batch: una query per N articoli.
+    /// Ritorna dizionario ArticleCode → List&lt;ArticleLocationDto&gt; (solo locazioni con QTLOC > 0,
+    /// ordinate per QTLOC DESC, con IsMainWithdrawal = LCPRC='Y').
+    /// </summary>
+    public async Task<Dictionary<string, List<ArticleLocationDto>>> GetStockBatchAsync(
+        IEnumerable<string> articleCodes)
+    {
+        try
+        {
+            var codes = articleCodes.ToList();
+            if (codes.Count == 0) return [];
+
+            using var db = Open();
+            var rows = (await db.QueryAsync<MlpaBatchRow>(
+                @"SELECT PACOD, MGCOD, LCCOD, QTLOC, LCPRC
+                  FROM dbo.L_MLPA
+                  WHERE PACOD IN @Codes AND QTLOC > 0
+                  ORDER BY PACOD, QTLOC DESC",
+                new { Codes = codes })).ToList();
+
+            return rows.GroupBy(r => r.PACOD ?? "")
+                       .ToDictionary(
+                           g => g.Key,
+                           g => g.Select(r => new ArticleLocationDto(
+                               WarehouseCode:    r.MGCOD ?? "",
+                               WarehouseDesc:    r.MGCOD ?? "",
+                               LocationCode:     r.LCCOD ?? "",
+                               LocationDesc:     "",
+                               Quantity:         r.QTLOC,
+                               MinQty:           0m,
+                               MaxQty:           0m,
+                               Priority:         r.LCPRC == "Y" ? "P" : "S",
+                               IsMainWithdrawal: r.LCPRC == "Y"
+                           )).ToList());
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.GetStockBatchAsync");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Wrapper generico per TRD_InsertMov. Ritorna IDMOV (>0) o &lt;=0 se fallito.
+    /// </summary>
+    public async Task<int> InsertMovAsync(ErpMovRequest req)
+    {
+        try
+        {
+            using var db = Open();
+            var p = BuildMovParams(req.ArticleCode, req.CausalCode, req.Qty,
+                                   req.WarehouseCode, req.LocationCode,
+                                   req.OperatorCode, req.ReferenceCode ?? "");
+            await db.ExecuteAsync("dbo.TRD_InsertMov", p,
+                commandType: System.Data.CommandType.StoredProcedure);
+            return p.Get<int>("@ReturnVal");
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.InsertMovAsync {Art}/{Causal}", req.ArticleCode, req.CausalCode);
+            throw;
+        }
+    }
+
+    // ─── Gestione Locazioni ───────────────────────────────────────────────────
+
+    /// <summary>Tutti i magazzini (MGCOD distinti da A_LOC), ordinati.</summary>
+    public async Task<List<string>> GetAllWarehouseCodesAsync()
+    {
+        try
+        {
+            using var db = Open();
+            return (await db.QueryAsync<string>(
+                "SELECT DISTINCT MGCOD FROM dbo.A_LOC WHERE MGCOD IS NOT NULL ORDER BY MGCOD"
+            )).ToList();
+        }
+        catch (Exception ex) { _log.LogError(ex, "GetAllWarehouseCodesAsync"); throw; }
+    }
+
+    /// <summary>True se la coppia MGCOD+LCCOD esiste già in A_LOC.</summary>
+    public async Task<bool> LocationExistsAsync(string mgCod, string lcCod)
+    {
+        try
+        {
+            using var db = Open();
+            return await db.ExecuteScalarAsync<int>(
+                "SELECT COUNT(1) FROM dbo.A_LOC WHERE MGCOD=@Mg AND LCCOD=@Lc",
+                new { Mg = mgCod, Lc = lcCod.Trim().ToUpper() }) > 0;
+        }
+        catch (Exception ex) { _log.LogError(ex, "LocationExistsAsync {Mg}/{Lc}", mgCod, lcCod); throw; }
+    }
+
+    /// <summary>
+    /// Crea una nuova locazione in A_LOC.
+    /// NOTA: verificare con IT se A_LOC ammette INSERT diretto; se esiste SP, sostituire con quella.
+    /// </summary>
+    public async Task CreateLocationAsync(string mgCod, string lcCod)
+    {
+        try
+        {
+            using var db = Open();
+            await db.ExecuteAsync(
+                "INSERT INTO dbo.A_LOC (MGCOD, LCCOD) VALUES (@Mg, @Lc)",
+                new { Mg = mgCod, Lc = lcCod.Trim().ToUpper() });
+        }
+        catch (Exception ex) { _log.LogError(ex, "CreateLocationAsync {Mg}/{Lc}", mgCod, lcCod); throw; }
+    }
+
+    /// <summary>Locazioni abbinate a un articolo in L_MLPA, con giacenza e flag principale.</summary>
+    public async Task<List<ManagedLocationDto>> GetArticleLocationsForMgmtAsync(string articleCode)
+    {
+        try
+        {
+            using var db = Open();
+            return (await db.QueryAsync<ManagedLocationDto>(
+                @"SELECT MGCOD AS WarehouseCode, LCCOD AS LocationCode,
+                         QTLOC AS CurrentQty,
+                         CASE WHEN LCPRC='Y' THEN 1 ELSE 0 END AS IsMain
+                  FROM dbo.L_MLPA
+                  WHERE PACOD = @Code
+                  ORDER BY LCPRC DESC, LCCOD",
+                new { Code = articleCode })).ToList();
+        }
+        catch (Exception ex) { _log.LogError(ex, "GetArticleLocationsForMgmtAsync {Art}", articleCode); throw; }
+    }
+
+    /// <summary>
+    /// Abbina un articolo a una locazione (INSERT L_MLPA con QTLOC=0).
+    /// NOTA: da verificare se A_LOC/L_MLPA ammettono scrittura diretta o serve SP.
+    /// </summary>
+    public async Task AssignArticleToLocationAsync(string articleCode, string mgCod, string lcCod)
+    {
+        try
+        {
+            using var db = Open();
+            var exists = await db.ExecuteScalarAsync<int>(
+                "SELECT COUNT(1) FROM dbo.L_MLPA WHERE PACOD=@Pa AND MGCOD=@Mg AND LCCOD=@Lc",
+                new { Pa = articleCode, Mg = mgCod, Lc = lcCod });
+            if (exists > 0) return; // già abbinata
+            await db.ExecuteAsync(
+                "INSERT INTO dbo.L_MLPA (PACOD, MGCOD, LCCOD, QTLOC) VALUES (@Pa, @Mg, @Lc, 0)",
+                new { Pa = articleCode, Mg = mgCod, Lc = lcCod.Trim().ToUpper() });
+        }
+        catch (Exception ex)
+        { _log.LogError(ex, "AssignArticleToLocationAsync {Art}/{Mg}/{Lc}", articleCode, mgCod, lcCod); throw; }
+    }
+
+    /// <summary>Imposta LCPRC='Y' sulla locazione scelta e la rimuove da tutte le altre righe dell'articolo.</summary>
+    public async Task SetMainLocationAsync(string articleCode, string mgCod, string lcCod)
+    {
+        try
+        {
+            using var db = Open();
+            await db.ExecuteAsync(
+                "UPDATE dbo.L_MLPA SET LCPRC=NULL WHERE PACOD=@Pa",
+                new { Pa = articleCode });
+            await db.ExecuteAsync(
+                "UPDATE dbo.L_MLPA SET LCPRC='Y' WHERE PACOD=@Pa AND MGCOD=@Mg AND LCCOD=@Lc",
+                new { Pa = articleCode, Mg = mgCod, Lc = lcCod });
+        }
+        catch (Exception ex)
+        { _log.LogError(ex, "SetMainLocationAsync {Art}/{Mg}/{Lc}", articleCode, mgCod, lcCod); throw; }
+    }
+
+    /// <summary>Rimuove il record da L_MLPA solo se QTLOC = 0. Ritorna false se giacenza presente.</summary>
+    public async Task<bool> RemoveArticleLocationAsync(string articleCode, string mgCod, string lcCod)
+    {
+        try
+        {
+            using var db = Open();
+            var qty = await db.ExecuteScalarAsync<decimal?>(
+                "SELECT QTLOC FROM dbo.L_MLPA WHERE PACOD=@Pa AND MGCOD=@Mg AND LCCOD=@Lc",
+                new { Pa = articleCode, Mg = mgCod, Lc = lcCod });
+            if (qty is not null && qty != 0m) return false;
+            await db.ExecuteAsync(
+                "DELETE FROM dbo.L_MLPA WHERE PACOD=@Pa AND MGCOD=@Mg AND LCCOD=@Lc",
+                new { Pa = articleCode, Mg = mgCod, Lc = lcCod });
+            return true;
+        }
+        catch (Exception ex)
+        { _log.LogError(ex, "RemoveArticleLocationAsync {Art}/{Mg}/{Lc}", articleCode, mgCod, lcCod); throw; }
+    }
+
     // ─── Row types (Dapper) ───────────────────────────────────────────────────
+
+    private class MlpaBatchRow
+    {
+        public string? PACOD { get; set; }
+        public string? MGCOD { get; set; }
+        public string? LCCOD { get; set; }
+        public decimal QTLOC { get; set; }
+        public string? LCPRC { get; set; }
+    }
 
     private class OprRow
     {

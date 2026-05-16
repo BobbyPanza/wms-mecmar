@@ -1,313 +1,424 @@
-@page "/list/pick"
+@page "/pick/list"
 
 @using System.Globalization
 @inject SessionService Session
-@inject MockWmsService Wms
+@inject PickListService PickSvc
 @inject ISnackbar Snackbar
+@inject IDialogService Dialog
 @inject NavigationManager Nav
 
 <PageTitle>Prelievo da Lista</PageTitle>
 
 @if (_list is null)
 {
-    @* ─── Selezione lista ─────────────────────────────────────────────────── *@
-    <MudText Typo="Typo.h6" Class="mb-3">Seleziona lista</MudText>
-    <BarcodeInput Label="Scan barcode lista" OnCodeScanned="OnListBarcode" AutoFocus="true" />
+    @* ─── Selezione lista ──────────────────────────────────────────────────── *@
+    <MudText Typo="Typo.h6" Class="mb-3">Prelievo da Lista</MudText>
+    <BarcodeInput Label="Scan bolla / codice lista" OnCodeScanned="OnListBarcode" AutoFocus="true" />
 
-    @foreach (var l in _lists)
+    @if (_loading)
     {
-        var pending = l.Items.Count(i => i.Status != PickStatus.Completed);
-        var noStock = l.Items.Count(i => !i.HasStock && i.Status != PickStatus.Completed);
-        <MudPaper Elevation="2" Class="pa-3 mb-2" Style="border-radius:10px;cursor:pointer;"
-                  @onclick="() => SelectList(l)">
-            <div class="d-flex justify-space-between align-start">
-                <div>
-                    <MudText Style="font-family:monospace;font-weight:700;">@l.Code</MudText>
-                    <MudText Typo="Typo.body2" Style="color:#94A3B8;">@l.Description</MudText>
-                    <MudText Typo="Typo.caption" Style="color:#64748B;">Rif: @l.Reference</MudText>
-                </div>
-                <div class="d-flex flex-column align-end gap-1">
-                    <MudChip T="string" Size="Size.Small"
-                             Color="@(l.Status == "In corso" ? Color.Warning : Color.Default)">
-                        @l.Status
-                    </MudChip>
-                    @if (noStock > 0)
-                    {
-                        <MudChip T="string" Size="Size.Small" Color="Color.Error"
-                                 Icon="@Icons.Material.Filled.Warning">
-                            @noStock senza scorta
+        <MudProgressLinear Indeterminate="true" Color="Color.Primary" Class="mt-3" />
+    }
+    else
+    {
+        @foreach (var h in _lists)
+        {
+            var pct = h.TotalRows > 0 ? (double)h.CompletedRows / h.TotalRows * 100 : 0;
+            <MudPaper Elevation="2" Class="pa-3 mb-2" Style="border-radius:10px;cursor:pointer;"
+                      @onclick="() => OpenList(h)">
+                <div class="d-flex justify-space-between align-start">
+                    <div style="min-width:0;flex:1;">
+                        <MudText Style="font-family:monospace;font-weight:700;">@h.Code</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">@h.Description</MudText>
+                        @if (h.OlCods.Count > 0)
+                        {
+                            <MudText Typo="Typo.caption" Style="color:#64748B;">
+                                Bolle: @string.Join(", ", h.OlCods)
+                            </MudText>
+                        }
+                    </div>
+                    <div class="d-flex flex-column align-end gap-1">
+                        <MudChip T="string" Size="Size.Small"
+                                 Color="@(h.Status == "InProgress" ? Color.Warning : Color.Default)">
+                            @(h.Status == "InProgress" ? "In corso" : "Aperta")
                         </MudChip>
-                    }
+                        @if (h.MissingRows > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Error">
+                                @h.MissingRows mancanti
+                            </MudChip>
+                        }
+                    </div>
                 </div>
-            </div>
-            <MudProgressLinear Value="@(l.Items.Count > 0 ? (double)l.Items.Count(i => i.Status == PickStatus.Completed) / l.Items.Count * 100 : 0)"
-                               Color="Color.Success" Rounded="true" Size="Size.Small" Class="mt-2" />
-            <MudText Typo="Typo.caption" Style="color:#94A3B8;" Class="mt-1">
-                @l.Items.Count(i => i.Status == PickStatus.Completed)/@l.Items.Count completati
-                · @l.CustomAttributeLabel
-            </MudText>
-        </MudPaper>
+                <MudProgressLinear Value="@pct" Color="Color.Success"
+                                   Rounded="true" Size="Size.Small" Class="mt-2" />
+                <MudText Typo="Typo.caption" Style="color:#94A3B8;" Class="mt-1">
+                    @h.CompletedRows / @h.TotalRows completati
+                </MudText>
+            </MudPaper>
+        }
+
+        @if (_lists.Count == 0 && !_loading)
+        {
+            <MudAlert Severity="Severity.Info" Class="mt-3">
+                Nessuna lista aperta. Scansiona il codice bolla per crearne una.
+            </MudAlert>
+        }
     }
 }
-else if (_activeItem is null)
+else
 {
-    @* ─── Lista articoli ──────────────────────────────────────────────────── *@
+    @* ─── Lista righe ──────────────────────────────────────────────────────── *@
     <div class="d-flex align-center mb-2 gap-2">
         <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
-                       OnClick="() => { _list = null; _activeItem = null; }" />
+                       OnClick="CloseList" />
         <div style="flex:1;min-width:0;">
-            <MudText Style="font-family:monospace;font-weight:700;font-size:0.95rem;">@_list.Code</MudText>
-            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_list.Reference</MudText>
+            <MudText Style="font-family:monospace;font-weight:700;font-size:.95rem;">
+                @_list.Code
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_list.Description</MudText>
         </div>
     </div>
 
-    @* Toolbar: sort + hide completate *@
+    @* Toolbar: sort + switch *@
     <MudPaper Class="pa-2 mb-2" Style="border-radius:8px;background:#242e42;">
         <div class="d-flex align-center gap-2 flex-wrap">
-            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Ordina:</MudText>
-            <MudButtonGroup Size="Size.Small" Variant="Variant.Outlined">
-                <MudButton Color="@(_sortMode == SortMode.MainLoc ? Color.Primary : Color.Default)"
-                           OnClick="() => _sortMode = SortMode.MainLoc">
-                    Loc. Principale
-                </MudButton>
-                <MudButton Color="@(_sortMode == SortMode.BestStock ? Color.Primary : Color.Default)"
-                           OnClick="() => _sortMode = SortMode.BestStock">
-                    Miglior Scorta
-                </MudButton>
-                <MudButton Color="@(_sortMode == SortMode.Custom ? Color.Primary : Color.Default)"
-                           OnClick="() => _sortMode = SortMode.Custom">
-                    @_list.CustomAttributeLabel
-                </MudButton>
-            </MudButtonGroup>
+            <MudSelect T="PickSortField" @bind-Value="_sortField"
+                       Label="Ordina" Dense="true" Variant="Variant.Outlined"
+                       Style="min-width:160px;max-width:200px;">
+                <MudSelectItem Value="PickSortField.ArticleCode">Codice articolo</MudSelectItem>
+                <MudSelectItem Value="PickSortField.Handling">Tipo handling</MudSelectItem>
+                <MudSelectItem Value="PickSortField.IdSpec">IDSpec</MudSelectItem>
+                <MudSelectItem Value="PickSortField.IdGroup">IDGroup</MudSelectItem>
+                <MudSelectItem Value="PickSortField.MainLocation">Locazione principale</MudSelectItem>
+            </MudSelect>
             <MudSpacer />
             <MudSwitch @bind-Value="_hideCompleted" Color="Color.Primary" Size="Size.Small"
                        Label="Nascondi completate" />
         </div>
     </MudPaper>
 
-    <BarcodeInput Label="Scan articolo per selezionare" OnCodeScanned="OnItemBarcode" AutoFocus="true" />
+    <BarcodeInput Label="Scan articolo" OnCodeScanned="OnArticleBarcode" AutoFocus="true" />
 
-    @foreach (var item in SortedItems)
+    @foreach (var row in SortedRows)
     {
-        var noStock = !item.HasStock && item.Status != PickStatus.Completed;
-        var bg = item.Status == PickStatus.Completed ? "#1e2d20"
-               : noStock                             ? "#2d1e1e"
-               : "#1e2a40";
-        var borderClass = item.Status == PickStatus.Completed ? "pick-item-done"
-                        : item.Status == PickStatus.Partial   ? "pick-item-partial"
-                        : "pick-item-pending";
-
-        <MudPaper Elevation="1" Class="@($"pa-3 mb-2 {borderClass}")"
+        var (bg, border) = RowStyle(row);
+        <MudPaper Elevation="1" Class="@($"pa-3 mb-2 {border}")"
                   Style="@($"border-radius:8px;background:{bg};cursor:pointer;")"
-                  @onclick="() => SelectItem(item)">
+                  @onclick="() => OpenRowDialog(row)">
             <div class="d-flex align-start justify-space-between">
                 <div style="min-width:0;flex:1;">
                     <div class="d-flex align-center gap-1">
-                        <MudText Style="font-weight:700;font-family:monospace;font-size:0.9rem;">@item.ArticleCode</MudText>
-                        <ArticleInfoButton ArticleCode="@item.ArticleCode" />
-                        @if (noStock)
+                        <MudText Style="font-weight:700;font-family:monospace;font-size:.9rem;">
+                            @row.ArticleCode
+                        </MudText>
+                        <ArticleInfoButton ArticleCode="@row.ArticleCode" />
+                        @if (!row.HasStock && row.StagingStatus == StagingStatus.Pending)
                         {
-                            <MudIcon Icon="@Icons.Material.Filled.Warning" Color="Color.Error" Size="Size.Small" />
+                            <MudIcon Icon="@Icons.Material.Filled.Warning"
+                                     Color="Color.Error" Size="Size.Small" />
                         }
                     </div>
-                    <MudText Typo="Typo.caption" Style="color:#94A3B8;word-break:break-word;">@item.ArticleDesc</MudText>
-
-                    <div class="d-flex gap-2 mt-1 flex-wrap">
-                        <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.LocationOn" Color="Color.Primary">
-                            @item.MainLocationCode
-                        </MudChip>
-                        @if (item.BestStockLocationCode != item.MainLocationCode)
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;word-break:break-word;">
+                        @row.ArticleDesc
+                    </MudText>
+                    <div class="d-flex gap-1 mt-1 flex-wrap">
+                        @if (!string.IsNullOrEmpty(row.MainLocationCode))
                         {
-                            <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.Star" Color="Color.Warning">
-                                @item.BestStockLocationCode (@item.BestStockQty)
+                            <MudChip T="string" Size="Size.Small"
+                                     Icon="@Icons.Material.Filled.LocationOn"
+                                     Color="Color.Primary">
+                                @row.MainLocationCode
                             </MudChip>
                         }
-                        <MudChip T="string" Size="Size.Small" Color="Color.Default">
-                            @_list.CustomAttributeLabel: @item.CustomAttribute
-                        </MudChip>
+                        @if (!string.IsNullOrEmpty(row.Handling))
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Default">
+                                @row.Handling
+                            </MudChip>
+                        }
+                        @if (row.IsExtraItem)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Secondary">
+                                Extra
+                            </MudChip>
+                        }
                     </div>
                 </div>
-                <div class="d-flex flex-column align-end ml-2">
-                    @if (item.Status == PickStatus.Completed)
+                <div class="d-flex flex-column align-end ml-2" style="min-width:64px;">
+                    @switch (row.StagingStatus)
                     {
-                        <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
-                    }
-                    else
-                    {
-                        <MudText Style="font-weight:700;color:#5B9BD5;white-space:nowrap;">
-                            @QtyFmt(item.PickedQty) / @QtyFmt(item.PlannedQty) @item.UoM
-                        </MudText>
-                        @if (item.Status == PickStatus.Partial)
-                        {
-                            <MudText Typo="Typo.caption" Style="color:#D4891A;">
-                                residuo: @QtyFmt(item.RemainingQty)
+                        case StagingStatus.Done:
+                            <MudIcon Icon="@Icons.Material.Filled.CheckCircle" Color="Color.Success" />
+                            break;
+                        case StagingStatus.Missing:
+                            <MudIcon Icon="@Icons.Material.Filled.Block" Color="Color.Error" />
+                            break;
+                        default:
+                            <MudText Style="font-weight:700;color:#5B9BD5;white-space:nowrap;font-size:.85rem;">
+                                @Fmt(row.TotalCoveredQty) / @Fmt(row.PlannedQty)
                             </MudText>
-                        }
+                            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@row.UoM</MudText>
+                            break;
                     }
                 </div>
             </div>
         </MudPaper>
     }
 
-    @if (_list.Items.All(i => i.Status == PickStatus.Completed))
-    {
-        <MudAlert Severity="Severity.Success" Class="mt-3" Icon="@Icons.Material.Filled.CheckCircle">
-            Lista completata!
-        </MudAlert>
-    }
-}
-else
-{
-    @* ─── Prelievo articolo ───────────────────────────────────────────────── *@
-    <MudIconButton Icon="@Icons.Material.Filled.ArrowBack" Size="Size.Small"
-                   OnClick="() => _activeItem = null" Class="mb-2" />
-
-    <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2a40;">
-        <div class="d-flex align-center gap-1 mb-1">
-            <MudText Style="font-weight:700;font-family:monospace;font-size:1.1rem;">@_activeItem.ArticleCode</MudText>
-            <ArticleInfoButton ArticleCode="@_activeItem.ArticleCode" />
-        </div>
-        <MudText Typo="Typo.body2" Style="color:#94A3B8;">@_activeItem.ArticleDesc</MudText>
-
-        <MudDivider Class="my-2" />
-
-        <div class="d-flex justify-space-between mb-1">
-            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Da prelevare</MudText>
-            <MudText Style="font-weight:700;color:#5B9BD5;">@_activeItem.RemainingQty @_activeItem.UoM</MudText>
-        </div>
-        <div class="d-flex justify-space-between mb-1">
-            <MudText Typo="Typo.caption" Style="color:#94A3B8;">Loc. principale</MudText>
-            <MudText Style="font-family:monospace;font-weight:600;">@_activeItem.MainLocationCode</MudText>
-        </div>
-        @if (_activeItem.BestStockLocationCode != _activeItem.MainLocationCode)
-        {
-            <div class="d-flex justify-space-between mb-1">
-                <MudText Typo="Typo.caption" Style="color:#94A3B8;">Miglior scorta</MudText>
-                <MudText Style="font-family:monospace;font-weight:600;color:#D4891A;">
-                    @_activeItem.BestStockLocationCode (@_activeItem.BestStockQty @_activeItem.UoM)
-                </MudText>
-            </div>
-        }
-        <div class="d-flex justify-space-between">
-            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@_list!.CustomAttributeLabel</MudText>
-            <MudText>@_activeItem.CustomAttribute</MudText>
-        </div>
-    </MudPaper>
-
-    @if (!_activeItem.HasStock)
-    {
-        <MudAlert Severity="Severity.Error" Class="mb-2">
-            Nessuna giacenza disponibile per questo articolo.
-        </MudAlert>
-    }
-
-    <BarcodeInput Label="Scan locazione prelievo" OnCodeScanned="OnPickLocationScanned" AutoFocus="true" />
-
-    @if (_pickLocation is not null)
-    {
-        <MudChip T="string" Color="Color.Info" Class="mb-2">Loc: @_pickLocation</MudChip>
-
-        <MudNumericField @bind-Value="_pickQty" Label="Quantità prelevata"
-                         Variant="Variant.Outlined"
-                         Min="0.001m" Max="@_activeItem.RemainingQty"
-                         Step="0.001m" Culture="@CultureInfo.CurrentCulture"
-                         Class="mb-3" AutoFocus="false" />
-
-        @if (_pickQty > _activeItem.RemainingQty)
-        {
-            <MudAlert Severity="Severity.Warning" Class="mb-2">
-                Quantità superiore al residuo (@_activeItem.RemainingQty).
-            </MudAlert>
-        }
-
-        <MudButton Variant="Variant.Filled" Color="Color.Success" FullWidth="true"
-                   Size="Size.Large" StartIcon="@Icons.Material.Filled.Check"
-                   Disabled="@(_pickQty <= 0 || _confirming)"
-                   OnClick="ConfirmPick">
-            @if (_confirming) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
-            else { <span>CONFERMA PRELIEVO</span> }
+    @* Bottom action bar *@
+    <div class="d-flex gap-2 mt-3">
+        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                   StartIcon="@Icons.Material.Filled.Add"
+                   OnClick="AddExtraRowDialog"
+                   Style="flex:1;">
+            Aggiungi riga
         </MudButton>
-    }
+        <MudButton Variant="Variant.Outlined" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.SelectAll"
+                   Disabled="@_executing"
+                   OnClick="PrelevaTutto"
+                   Style="flex:1;">
+            Preleva tutto
+        </MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Success"
+                   StartIcon="@Icons.Material.Filled.PlayArrow"
+                   Disabled="@(_executing || !HasStagedPicks)"
+                   OnClick="FaiPrelievi"
+                   Style="flex:1;">
+            @if (_executing)
+            { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else
+            { <span>Fai prelievi</span> }
+        </MudButton>
+    </div>
 }
 
 @code {
-    private enum SortMode { MainLoc, BestStock, Custom }
+    // ─── State ────────────────────────────────────────────────────────────────
 
-    private List<PickListV2Dto> _lists = [];
-    private PickListV2Dto? _list;
-    private PickListV2ItemDto? _activeItem;
-    private SortMode _sortMode = SortMode.MainLoc;
+    private List<PickListHeaderDto> _lists  = [];
+    private PickListHeaderDto?      _list;
+    private List<PickListRowDto>    _rows   = [];
+    private PickSortField           _sortField = PickSortField.Handling;
     private bool _hideCompleted = true;
-    private string? _pickLocation;
-    private decimal _pickQty = 1;
-    private bool _confirming;
+    private bool _loading;
+    private bool _executing;
 
-    private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+    private bool HasStagedPicks =>
+        _rows.Any(r => r.Picks.Any(p => !p.IsExecuted));
 
-    private IEnumerable<PickListV2ItemDto> SortedItems
+    private IEnumerable<PickListRowDto> SortedRows
     {
         get
         {
-            var items = _list!.Items.AsEnumerable();
-            if (_hideCompleted) items = items.Where(i => i.Status != PickStatus.Completed);
-            return _sortMode switch
+            var rows = _rows.AsEnumerable();
+            if (_hideCompleted)
+                rows = rows.Where(r => r.StagingStatus != StagingStatus.Done);
+            // Mancanti sempre in fondo
+            rows = _sortField switch
             {
-                SortMode.BestStock => items.OrderByDescending(i => i.BestStockQty),
-                SortMode.Custom    => items.OrderBy(i => i.CustomAttribute),
-                _                  => items.OrderBy(i => i.MainLocationCode)
+                PickSortField.Handling     => rows.OrderBy(r => r.IsMissing)
+                                                  .ThenBy(r => r.Handling)
+                                                  .ThenBy(r => r.ArticleCode),
+                PickSortField.IdSpec       => rows.OrderBy(r => r.IsMissing)
+                                                  .ThenBy(r => r.IdSpec)
+                                                  .ThenBy(r => r.ArticleCode),
+                PickSortField.IdGroup      => rows.OrderBy(r => r.IsMissing)
+                                                  .ThenBy(r => r.IdGroup)
+                                                  .ThenBy(r => r.ArticleCode),
+                PickSortField.MainLocation => rows.OrderBy(r => r.IsMissing)
+                                                  .ThenBy(r => r.MainLocationCode)
+                                                  .ThenBy(r => r.ArticleCode),
+                _                          => rows.OrderBy(r => r.IsMissing)
+                                                  .ThenBy(r => r.ArticleCode),
             };
+            return rows;
         }
     }
 
-    protected override void OnInitialized()
+    // ─── Init ─────────────────────────────────────────────────────────────────
+
+    protected override async Task OnInitializedAsync()
     {
         Session.SetPageTitle("Prelievo da Lista");
-        _lists = Wms.GetPickListsV2();
+        await LoadListsAsync();
     }
 
-    private void OnListBarcode(string code)
+    private async Task LoadListsAsync()
     {
-        var found = _lists.FirstOrDefault(l =>
+        _loading = true;
+        try   { _lists = await PickSvc.GetPickListsAsync(); }
+        catch { Snackbar.Add("Errore caricamento liste", Severity.Error); }
+        _loading = false;
+    }
+
+    // ─── Selezione lista ──────────────────────────────────────────────────────
+
+    private async Task OnListBarcode(string code)
+    {
+        var existing = _lists.FirstOrDefault(l =>
             l.Code.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase));
-        if (found is not null) SelectList(found);
-        else Snackbar.Add($"Lista {code} non trovata", Severity.Error);
-    }
-
-    private void SelectList(PickListV2Dto l) { _list = l; _activeItem = null; }
-
-    private void OnItemBarcode(string code)
-    {
-        var item = _list!.Items.FirstOrDefault(i =>
-            i.ArticleCode.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase)
-            && i.Status != PickStatus.Completed);
-        if (item is not null) SelectItem(item);
-        else Snackbar.Add($"Articolo {code} non trovato o già completato", Severity.Warning);
-    }
-
-    private void SelectItem(PickListV2ItemDto item)
-    {
-        if (item.Status == PickStatus.Completed) return;
-        _activeItem  = item;
-        _pickLocation = null;
-        _pickQty      = item.RemainingQty;
-    }
-
-    private void OnPickLocationScanned(string code) => _pickLocation = code.Trim().ToUpper();
-
-    private async Task ConfirmPick()
-    {
-        if (_list is null || _activeItem is null || _pickLocation is null) return;
-        _confirming = true;
-        await Task.Delay(300);
-
-        var (ok, msg) = Wms.PickListV2Item(_list.Code, _activeItem.Id, _pickQty, _pickLocation, Session.OperatorCode!);
-        if (ok)
+        if (existing is not null)
         {
-            Snackbar.Add(msg, Severity.Success);
-            _activeItem = null;
+            await OpenList(existing);
+            return;
         }
-        else Snackbar.Add(msg, Severity.Error);
 
-        _confirming = false;
+        // Prova a creare la lista dalla bolla
+        _loading = true;
+        StateHasChanged();
+        try
+        {
+            var id = await PickSvc.LoadListFromOlCodAsync(code.Trim(), Session.OperatorCode!);
+            await LoadListsAsync();
+            var created = _lists.FirstOrDefault(l => l.Id == id);
+            if (created is not null) await OpenList(created);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add(ex.Message, Severity.Warning);
+        }
+        _loading = false;
     }
+
+    private async Task OpenList(PickListHeaderDto h)
+    {
+        _list = h;
+        Session.SetPageTitle(h.Code);
+        Session.SetPrintContext("PICK", new() { ["LISTCODE"] = h.Code });
+        await RefreshRowsAsync();
+    }
+
+    private async Task RefreshRowsAsync()
+    {
+        try   { _rows = await PickSvc.GetPickListDetailAsync(_list!.Id); }
+        catch { Snackbar.Add("Errore caricamento righe", Severity.Error); }
+    }
+
+    private async Task CloseList()
+    {
+        _list = null;
+        _rows = [];
+        Session.ClearPrintContext();
+        await LoadListsAsync();
+    }
+
+    // ─── Barcode articolo ─────────────────────────────────────────────────────
+
+    private async Task OnArticleBarcode(string code)
+    {
+        var row = _rows.FirstOrDefault(r =>
+            r.ArticleCode.Equals(code.Trim(), StringComparison.OrdinalIgnoreCase));
+        if (row is null)
+        {
+            Snackbar.Add($"{code}: non trovato in lista", Severity.Warning);
+            return;
+        }
+        await OpenRowDialog(row);
+    }
+
+    // ─── Dialog articolo ─────────────────────────────────────────────────────
+
+    private async Task OpenRowDialog(PickListRowDto row)
+    {
+        var param = new DialogParameters<PickRowDialog>
+        {
+            { x => x.Row,          row          },
+            { x => x.OperatorCode, Session.OperatorCode! }
+        };
+        var opt = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        var dlg = await Dialog.ShowAsync<PickRowDialog>(row.ArticleCode, param, opt);
+        if ((await dlg.Result) is { Canceled: false })
+            await RefreshRowsAsync();
+    }
+
+    // ─── Preleva tutto ────────────────────────────────────────────────────────
+
+    private async Task PrelevaTutto()
+    {
+        _executing = true;
+        try
+        {
+            await PickSvc.StageAllFromMainAsync(_list!.Id, Session.OperatorCode!);
+            await RefreshRowsAsync();
+            Snackbar.Add("Pick staged dalla locazione principale per tutti gli articoli disponibili",
+                         Severity.Info);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _executing = false;
+    }
+
+    // ─── Fai prelievi ─────────────────────────────────────────────────────────
+
+    private async Task FaiPrelievi()
+    {
+        var dlgConf = await Dialog.ShowAsync<ConfirmDialog>("Conferma prelievi",
+            new DialogParameters<ConfirmDialog>
+            {
+                { x => x.Message, "Eseguire tutti i prelievi staged? I movimenti verranno scritti sul gestionale." }
+            },
+            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
+        if ((await dlgConf.Result)?.Canceled == true) return;
+
+        _executing = true;
+        try
+        {
+            var (ok, errors) = await PickSvc.ExecuteStagedPicksAsync(
+                _list!.Id, Session.OperatorCode!, Session.NodeId);
+
+            if (errors.Count > 0)
+            {
+                foreach (var e in errors)
+                    Snackbar.Add(e, Severity.Error);
+            }
+            if (ok > 0)
+                Snackbar.Add($"{ok} prelievo/i registrat{(ok == 1 ? "o" : "i")} su ERP",
+                             Severity.Success);
+
+            await RefreshRowsAsync();
+            // Aggiorna anche la testata
+            var updated = await PickSvc.GetPickListsAsync();
+            _list = updated.FirstOrDefault(l => l.Id == _list!.Id) ?? _list;
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _executing = false;
+    }
+
+    // ─── Aggiungi riga extra ──────────────────────────────────────────────────
+
+    private async Task AddExtraRowDialog()
+    {
+        var param = new DialogParameters<AddExtraRowDialog>
+        {
+            { x => x.AvailableOlCods, _list!.OlCods }
+        };
+        var opt = new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true, CloseButton = true };
+        var dlg = await Dialog.ShowAsync<AddExtraRowDialog>("Aggiungi riga", param, opt);
+        var res = await dlg.Result;
+        if (res is { Canceled: false, Data: AddExtraRowResult r })
+        {
+            try
+            {
+                await PickSvc.AddExtraRowAsync(_list!.Id, r.ArticleCode, r.PlannedQty,
+                                               r.OlCod, Session.OperatorCode!);
+                await RefreshRowsAsync();
+                Snackbar.Add($"{r.ArticleCode} aggiunto alla lista", Severity.Success);
+            }
+            catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        }
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    private static string Fmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    private static (string Bg, string BorderClass) RowStyle(PickListRowDto row) =>
+        row.StagingStatus switch
+        {
+            StagingStatus.Done    => ("#1e2d20", "pick-row-done"),
+            StagingStatus.Partial => ("#2d2a10", "pick-row-partial"),
+            StagingStatus.Missing => ("#2d1e1e", "pick-row-missing"),
+            _                     => ("#1e2a40", "pick-row-pending")
+        };
 }

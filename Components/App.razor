@@ -22,7 +22,19 @@
     <Routes />
     <ReconnectModal />
     <script src="_content/MudBlazor/MudBlazor.min.js"></script>
-    <script src="@Assets["_framework/blazor.web.js"]"></script>
+    <script src="@Assets["_framework/blazor.web.js"]" autostart="false"></script>
+    <script>
+        Blazor.start({
+            circuit: {
+                reconnectionOptions: {
+                    maxRetries: 30,
+                    retryIntervalMilliseconds: (previousAttempts, maxRetries) =>
+                        previousAttempts < 5 ? 2000 :
+                        previousAttempts < 15 ? 5000 : 10000
+                }
+            }
+        });
+    </script>
 </body>
 
 </html>

@@ -159,45 +159,78 @@ public record ProductionPickRowDto(
                                :                    PickStatus.Pending;
 };
 
-// ─── Liste di prelievo v2 ─────────────────────────────────────────────────────
-// Struttura riprogettata: multi-prelievo per articolo, loc principale + loc
-// con più scorta, attributo riepilogo customizzabile.
+// ─── Liste di prelievo ────────────────────────────────────────────────────────
 
-public record PickListV2Dto(
-    string Code,
-    string Description,
-    string Reference,               // es. bolla di consegna, OC cliente
-    DateTime CreatedAt,
-    string Status,
-    string CustomAttributeLabel,    // etichetta colonna custom (es. "Tipo Handling")
-    List<PickListV2ItemDto> Items
+/// <summary>Testata lista — usata nella schermata di selezione.</summary>
+public record PickListHeaderDto(
+    Guid         Id,
+    string       Code,
+    string       Description,
+    string       Status,
+    DateTime     CreatedAt,
+    string       CreatedByOp,
+    int          TotalRows,
+    int          CompletedRows,
+    int          MissingRows,
+    List<string> OlCods            // bolle di produzione collegate
 );
 
-public class PickListV2ItemDto
+/// <summary>Riga articolo da prelevare, arricchita con giacenze ERP e prelievi staged.</summary>
+public class PickListRowDto
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
-    public string ArticleCode { get; set; } = "";
-    public string ArticleDesc { get; set; } = "";
-    public string UoM { get; set; } = "";
-    public decimal PlannedQty { get; set; }
-    public decimal PickedQty { get; set; }
-    public decimal RemainingQty => PlannedQty - PickedQty;
+    public Guid    Id               { get; set; }
+    public Guid    ListId           { get; set; }
+    public string  ArticleCode      { get; set; } = "";
+    public string  ArticleDesc      { get; set; } = "";
+    public string  UoM              { get; set; } = "";
+    public decimal PlannedQty       { get; set; }
+    public string? OlCod            { get; set; }       // bolla di produzione (null = extra)
+    public string  Handling         { get; set; } = "";
+    public int?    IdSpec           { get; set; }
+    public int?    IdGroup          { get; set; }
+    public string  MainWarehouseCode { get; set; } = "";
+    public string  MainLocationCode  { get; set; } = "";
+    public bool    IsMissing         { get; set; }
+    public bool    IsExtraItem       { get; set; }
+    public int     SortOrder         { get; set; }
 
-    // Locazione principale da anagrafica
-    public string MainLocationCode { get; set; } = "";
-    public string MainLocationDesc { get; set; } = "";
+    // Giacenze ERP — popolate da PickListService.GetPickListDetailAsync
+    public List<ArticleLocationDto> Locations { get; set; } = [];
 
-    // Locazione con la scorta maggiore (calcolata)
-    public string BestStockLocationCode { get; set; } = "";
-    public string BestStockLocationDesc { get; set; } = "";
-    public decimal BestStockQty { get; set; }
+    // Prelievi (staged = non ancora eseguiti; executed = già scritti su ERP)
+    public List<StagedPickDto> Picks { get; set; } = [];
 
-    // Attributo riepilogo (valore specifico dell'articolo nella lista)
-    public string CustomAttribute { get; set; } = "";
+    // Calcolati
+    public decimal StagedQty       => Picks.Where(p => !p.IsExecuted).Sum(p => p.PickedQty);
+    public decimal ExecutedQty     => Picks.Where(p => p.IsExecuted).Sum(p => p.PickedQty);
+    public decimal TotalCoveredQty => StagedQty + ExecutedQty;
+    public decimal RemainingQty    => Math.Max(0, PlannedQty - TotalCoveredQty);
+    public bool    HasStock        => Locations.Any(l => l.Quantity > 0);
 
-    public bool HasStock => BestStockQty > 0;
-    public PickStatus Status { get; set; } = PickStatus.Pending;
+    public StagingStatus StagingStatus =>
+        IsMissing ? StagingStatus.Missing :
+        TotalCoveredQty >= PlannedQty && PlannedQty > 0 ? StagingStatus.Done :
+        TotalCoveredQty > 0 ? StagingStatus.Partial :
+        StagingStatus.Pending;
 }
+
+/// <summary>Singolo prelievo — staged (ExecutedAt null) o già eseguito su ERP.</summary>
+public class StagedPickDto
+{
+    public Guid      Id            { get; set; }
+    public Guid      RowId         { get; set; }
+    public decimal   PickedQty     { get; set; }
+    public string    WarehouseCode { get; set; } = "";
+    public string    LocationCode  { get; set; } = "";
+    public string    OperatorCode  { get; set; } = "";
+    public DateTime  StagedAt      { get; set; }
+    public DateTime? ExecutedAt    { get; set; }
+    public int?      ErpMovId      { get; set; }
+    public bool      IsExecuted    => ExecutedAt.HasValue;
+}
+
+public enum PickSortField { ArticleCode, Handling, IdSpec, IdGroup, MainLocation }
+public enum StagingStatus  { Pending, Partial, Done, Missing }
 
 // ─── Accettazione merce ───────────────────────────────────────────────────────
 
@@ -273,6 +306,37 @@ public class PrintTemplateParam
     public bool   IsRequired  { get; set; }
     public int    SortOrder   { get; set; }
 }
+
+// ─── Gestione locazioni ───────────────────────────────────────────────────────
+
+public class ManagedLocationDto
+{
+    public string  WarehouseCode { get; set; } = "";
+    public string  LocationCode  { get; set; } = "";
+    public decimal CurrentQty    { get; set; }
+    public bool    IsMain        { get; set; }
+}
+
+// ─── Pick list service ────────────────────────────────────────────────────────
+
+public record AddExtraRowResult(
+    string  ArticleCode,
+    string  ArticleDesc,
+    string  UoM,
+    decimal PlannedQty,
+    string? OlCod
+);
+
+public record ErpMovRequest(
+    string  ArticleCode,
+    string  CausalCode,
+    decimal Qty,
+    string  WarehouseCode,
+    string  LocationCode,
+    string  OperatorCode,
+    string? ReferenceCode = null,
+    int     NodeId        = 0
+);
 
 // ─── Magazzini ────────────────────────────────────────────────────────────────
 

@@ -82,10 +82,6 @@ public class MockWmsService
 
     private readonly List<ProductionOrderDto> _productionOrders;
 
-    // ─── Liste di prelievo v2 ────────────────────────────────────────────────
-
-    private readonly List<PickListV2Dto> _pickListsV2;
-
     // ─── Accettazione ─────────────────────────────────────────────────────────
 
     private readonly List<AcceptanceDocDto> _acceptanceDocs;
@@ -137,37 +133,6 @@ public class MockWmsService
                 [
                     new(Guid.NewGuid(), "COL-DX150", "COLLETTORE DISTRIBUZIONE DN150", "PZ", 1, 0, "MAG", "B-02-01", 2, PickStatus.Pending),
                     new(Guid.NewGuid(), "GUA-SIL50", "GUARNIZIONE SILICONE 50mm", "PZ", 3, 0, "MAG", "C-02-01", 89, PickStatus.Pending),
-                ]
-            ),
-        ];
-
-        _pickListsV2 =
-        [
-            new(
-                Code: "LIST-2025-0015",
-                Description: "Picking OC-2025-0421 — Cliente Rossi Impianti",
-                Reference: "DDT-2025-0067",
-                CreatedAt: DateTime.Today.AddHours(-2),
-                Status: "In corso",
-                CustomAttributeLabel: "Tipo Handling",
-                Items:
-                [
-                    new() { ArticleCode="VIT-M0820", ArticleDesc="VITE M8x20 ZN",           UoM="PZ",  PlannedQty=50,  PickedQty=50, MainLocationCode="BULK-01", MainLocationDesc="Zona Bulk / Scaffale 01",              BestStockLocationCode="BULK-01", BestStockLocationDesc="Zona Bulk / Scaffale 01",              BestStockQty=1250, CustomAttribute="Palette",  Status=PickStatus.Completed },
-                    new() { ArticleCode="GUA-SIL50", ArticleDesc="GUARNIZIONE SILICONE 50mm", UoM="PZ", PlannedQty=20,  PickedQty=0,  MainLocationCode="C-02-01", MainLocationDesc="Corsia C / Scaffale 02 / Ripiano 1",    BestStockLocationCode="C-02-01", BestStockLocationDesc="Corsia C / Scaffale 02 / Ripiano 1",    BestStockQty=89,   CustomAttribute="Collo",    Status=PickStatus.Pending  },
-                    new() { ArticleCode="TEN-DN25",  ArticleDesc="TENUTA MECCANICA DN25",     UoM="PZ", PlannedQty=5,   PickedQty=0,  MainLocationCode="C-01-03", MainLocationDesc="Corsia C / Scaffale 01 / Ripiano 3",    BestStockLocationCode="C-01-03", BestStockLocationDesc="Corsia C / Scaffale 01 / Ripiano 3",    BestStockQty=45,   CustomAttribute="Collo",    Status=PickStatus.Pending  },
-                ]
-            ),
-            new(
-                Code: "LIST-2025-0016",
-                Description: "Riassortimento scaffali zona A",
-                Reference: "INT-2025-0015",
-                CreatedAt: DateTime.Today.AddHours(-5),
-                Status: "Aperta",
-                CustomAttributeLabel: "Zona dest.",
-                Items:
-                [
-                    new() { ArticleCode="BRU-0500",  ArticleDesc="BRUCIATORE GAS 0.5 MW",    UoM="PZ", PlannedQty=2,   PickedQty=0,  MainLocationCode="A-01-02", MainLocationDesc="Corsia A / Scaffale 01 / Ripiano 2",    BestStockLocationCode="A-01-02", BestStockLocationDesc="Corsia A / Scaffale 01 / Ripiano 2",    BestStockQty=3,    CustomAttribute="Zona A",   Status=PickStatus.Pending  },
-                    new() { ArticleCode="RES-3KW",   ArticleDesc="RESISTENZA ELETTRICA 3KW",  UoM="PZ", PlannedQty=3,   PickedQty=0,  MainLocationCode="A-01-01", MainLocationDesc="Corsia A / Scaffale 01 / Ripiano 1",    BestStockLocationCode="A-01-01", BestStockLocationDesc="Corsia A / Scaffale 01 / Ripiano 1",    BestStockQty=0,    CustomAttribute="Zona A",   Status=PickStatus.Pending  },
                 ]
             ),
         ];
@@ -448,43 +413,6 @@ public class MockWmsService
     }
 
 
-    // ─── Liste di prelievo v2 ────────────────────────────────────────────────
-
-    public List<PickListV2Dto> GetPickListsV2() => [.. _pickListsV2];
-
-    public PickListV2Dto? GetPickListV2(string code)
-        => _pickListsV2.FirstOrDefault(l => l.Code == code);
-
-    public (bool Ok, string Message) PickListV2Item(
-        string listCode, Guid itemId, decimal qty, string locationCode, string operatorCode)
-    {
-        var list = _pickListsV2.FirstOrDefault(l => l.Code == listCode);
-        if (list is null) return (false, "Lista non trovata");
-        var item = list.Items.FirstOrDefault(i => i.Id == itemId);
-        if (item is null) return (false, "Articolo non trovato");
-
-        // Scala giacenza
-        var stock = _stocks.FirstOrDefault(s => s.PaCod == item.ArticleCode && s.LcCod == locationCode);
-        if (stock is not null)
-        {
-            var idx = _stocks.IndexOf(stock);
-            _stocks[idx] = stock with { Qty = Math.Max(0, stock.Qty - qty) };
-            // Ricalcola BestStock
-            item.BestStockQty = Math.Max(0, item.BestStockQty - qty);
-        }
-
-        item.PickedQty = Math.Min(item.PlannedQty, item.PickedQty + qty);
-        item.Status = item.PickedQty >= item.PlannedQty ? PickStatus.Completed
-                    : item.PickedQty > 0                ? PickStatus.Partial
-                    : PickStatus.Pending;
-
-        var op = Operators.FirstOrDefault(o => o.Code == operatorCode);
-        _movements.Insert(0, new MovementDto(DateTime.Now, "SMI", "Scarico lista prelievo", -qty,
-            operatorCode, op == default ? operatorCode : op.Name, listCode, "MAG", locationCode));
-
-        return (true, $"{qty} {item.ArticleCode} prelevati");
-    }
-
     // ─── Accettazione ─────────────────────────────────────────────────────────
 
     public List<AcceptanceDocDto> GetAcceptanceDocs() => [.. _acceptanceDocs];
@@ -539,8 +467,7 @@ public class MockWmsService
     public int GetOpenProductionOrders()
         => _productionOrders.Count(o => o.Status != "Chiuso");
 
-    public int GetOpenPickLists()
-        => _pickListsV2.Count(l => l.Status != "Chiusa");
+    public int GetOpenPickLists() => 0; // Ora gestito da PickListService su Logic DB
 
     public int GetLowStockArticles()
         => _articles.Count(a =>
