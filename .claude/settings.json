@@ -6,7 +6,8 @@
       "Bash(sqlcmd -S localhost -U sa -P Intsupport1 -d FactoryMecmar -Q ':*)",
       "Bash(sqlcmd -S localhost -U sa -P Intsupport1 -d FactoryMecmar -Q \" SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE '%CMM%' OR TABLE_NAME LIKE '%CAU%' OR TABLE_NAME LIKE '%causale%' ORDER BY TABLE_NAME\" -W echo \"=== A_CAU columns ===\" sqlcmd -S localhost -U sa -P Intsupport1 -d FactoryMecmar -Q \" SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='A_CAU' ORDER BY ORDINAL_POSITION\" -W echo \"=== A_CMM sample data ===\" sqlcmd -S localhost -U sa -P Intsupport1 -d FactoryMecmar -Q \" SELECT TOP 30 * FROM A_CMM\" -W)",
       "Read(//c/dev/WMS/**)",
-      "Bash(gh auth:*)"
+      "Bash(gh auth:*)",
+      "Bash(gh repo:*)"
     ],
     "additionalDirectories": [
       "C:\\Users\\russo\\.claude\\projects\\c--dev-WMS\\memory"

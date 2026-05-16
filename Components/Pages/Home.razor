@@ -4,6 +4,7 @@
 @inject SessionService Session
 @inject MockWmsService Wms
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <PageTitle>Menu — WMS Mecmar</PageTitle>
 
@@ -51,10 +52,10 @@
              TileColor="#4A9ECC"
              Route="/query" />
 
-    <WmsTile Icon="@Icons.Material.Filled.Settings"
-             Title="Configurazione"
-             TileColor="#546E7A"
-             Route="/config" />
+    <WmsTile Icon="@Icons.Material.Filled.Edit"
+             Title="Rettifiche"
+             TileColor="#37474F"
+             Route="/adjustments" />
 
     <WmsTile Icon="@Icons.Material.Filled.SwapHoriz"
              Title="Spostamento Semplice"
@@ -67,11 +68,6 @@
              Route="/move/cart"
              Badge="@(Session.Cart.Count > 0 ? Session.Cart.Count.ToString() : null)" />
 
-    <WmsTile Icon="@Icons.Material.Filled.FormatListBulleted"
-             Title="Lista Prelievo"
-             TileColor="#2E7D32"
-             Route="/list/pick" />
-
     <WmsTile Icon="@Icons.Material.Filled.PrecisionManufacturing"
              Title="Prelievo Produzione"
              TileColor="#B71C1C"
@@ -82,20 +78,15 @@
              TileColor="#00838F"
              Route="/acceptance" />
 
-    <WmsTile Icon="@Icons.Material.Filled.Output"
-             Title="Spedizione"
-             TileColor="#1565C0"
-             Route="/shipping" />
-
     <WmsTile Icon="@Icons.Material.Filled.Inventory"
              Title="Inventario"
              TileColor="#F57F17"
              Route="/inventory" />
 
-    <WmsTile Icon="@Icons.Material.Filled.Edit"
-             Title="Rettifiche"
-             TileColor="#37474F"
-             Route="/adjustments" />
+    <WmsTile Icon="@Icons.Material.Filled.Settings"
+             Title="Configurazione"
+             TileColor="#546E7A"
+             Route="/config" />
 
 </div>
 
@@ -105,8 +96,11 @@
         Session.SetPageTitle("WMS Mecmar");
     }
 
-    private void Logout()
+    private async Task Logout()
     {
+        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-code");
+        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-name");
+        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-role");
         Session.Logout();
         Nav.NavigateTo("/login");
     }
