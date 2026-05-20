@@ -2,6 +2,7 @@
 @inject PrintService Printer
 @inject SessionService Session
 @inject ISnackbar Snackbar
+@inject IJSRuntime JS
 
 <MudDialog>
     <TitleContent>
@@ -27,10 +28,11 @@
         }
         else
         {
-            @* ─── Selezione template ─────────────────────────────────────────── *@
+            @* ─── A) Selezione report ─────────────────────────────────────────── *@
             @if (_templates.Count > 1)
             {
-                <MudSelect T="PrintTemplate" @bind-Value="_selected" Label="Report"
+                <MudSelect T="PrintTemplate" Value="_selected" ValueChanged="OnTemplateChangedAsync"
+                           Label="Report"
                            Variant="Variant.Outlined" Class="mb-3"
                            ToStringFunc="@(t => t?.Name ?? string.Empty)">
                     @foreach (var t in _templates)
@@ -46,9 +48,19 @@
                 </MudText>
             }
 
-            @* ─── Parametri ──────────────────────────────────────────────────── *@
             @if (_selected is not null)
             {
+                @* ─── B) Stampante ───────────────────────────────────────────────── *@
+                <MudAutocomplete T="string" @bind-Value="_printerName"
+                                 Label="Stampante"
+                                 Variant="Variant.Outlined" Class="mb-2"
+                                 SearchFunc="SearchPrinters"
+                                 Immediate="true" CoerceValue="true"
+                                 AdornmentIcon="@Icons.Material.Filled.Print"
+                                 Adornment="Adornment.Start"
+                                 HelperText="@PrinterHelperText" />
+
+                @* ─── Parametri ──────────────────────────────────────────────────── *@
                 @foreach (var p in _selected.Params.OrderBy(x => x.SortOrder))
                 {
                     var isAuto = p.AutoFillKey is not null &&
@@ -62,6 +74,13 @@
                                   AdornmentIcon="@(isAuto ? Icons.Material.Filled.AutoAwesome : null)"
                                   AdornmentColor="Color.Success" />
                 }
+
+                @* ─── C) Numero etichette ────────────────────────────────────────── *@
+                <MudNumericField @bind-Value="_copies"
+                                 Label="Numero etichette"
+                                 Variant="Variant.Outlined"
+                                 Min="1" Max="999"
+                                 Class="mb-2" />
 
                 @if (!Printer.IsConfigured)
                 {
@@ -88,29 +107,48 @@
 @code {
     [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
 
-    private List<PrintTemplate> _templates = [];
-    private PrintTemplate? _selected;
+    private List<PrintTemplate>      _templates   = [];
+    private PrintTemplate?           _selected;
     private Dictionary<string, string> _paramValues = new();
+    private List<string>             _printers    = [];
+    private string?                  _printerName;
+    private int  _copies  = 1;
     private bool _loading = true;
     private bool _printing;
 
+    private string PrinterHelperText =>
+        _printerName == _selected?.PrinterName || _printerName == Printer.DefaultPrinterName
+            ? "Default aziendale"
+            : "Default terminale (salvato in questo browser)";
+
     protected override async Task OnInitializedAsync()
     {
+        _printers = Printer.GetInstalledPrinters().ToList();
+
         if (!Logic.IsConfigured) { _loading = false; return; }
 
-        try
-        {
-            _templates = await Logic.GetPrintTemplatesAsync(Session.PrintContext);
-        }
+        try { _templates = await Logic.GetPrintTemplatesAsync(Session.PrintContext); }
         catch { _templates = []; }
 
         if (_templates.Count > 0)
         {
             _selected = _templates[0];
             BuildParamValues();
+            await LoadSavedPrinterAsync();
         }
 
+        if (Session.PrintAutoFill.TryGetValue("COPIES", out var copiesStr)
+            && int.TryParse(copiesStr, out var copiesVal) && copiesVal > 0)
+            _copies = copiesVal;
+
         _loading = false;
+    }
+
+    private async Task OnTemplateChangedAsync(PrintTemplate? t)
+    {
+        _selected = t;
+        BuildParamValues();
+        await LoadSavedPrinterAsync();
     }
 
     private void BuildParamValues()
@@ -126,15 +164,23 @@
         }
     }
 
-    // Quando cambia il template selezionato, ricalcola i parametri
-    private PrintTemplate? _prevSelected;
-    protected override void OnParametersSet()
+    // Carica la stampante salvata per questo report dal localStorage.
+    // Priorità: localStorage > template.PrinterName > default config
+    private async Task LoadSavedPrinterAsync()
     {
-        if (_selected != _prevSelected)
-        {
-            _prevSelected = _selected;
-            BuildParamValues();
-        }
+        if (_selected is null) return;
+        var storageKey = $"wms-printer-{_selected.ReportName}";
+        var saved = await JS.InvokeAsync<string?>("localStorage.getItem", storageKey);
+        _printerName = !string.IsNullOrEmpty(saved) ? saved
+                     : _selected.PrinterName ?? Printer.DefaultPrinterName ?? "";
+    }
+
+    private Task<IEnumerable<string>> SearchPrinters(string? value, CancellationToken _)
+    {
+        if (string.IsNullOrEmpty(value))
+            return Task.FromResult<IEnumerable<string>>(_printers);
+        return Task.FromResult<IEnumerable<string>>(
+            _printers.Where(p => p.Contains(value, StringComparison.OrdinalIgnoreCase)));
     }
 
     private async Task DoPrint()
@@ -142,11 +188,18 @@
         if (_selected is null) return;
         _printing = true;
 
+        // Salva la stampante scelta per questo terminale/report
+        if (!string.IsNullOrEmpty(_printerName))
+            await JS.InvokeVoidAsync("localStorage.setItem",
+                $"wms-printer-{_selected.ReportName}", _printerName);
+
         var (ok, msg) = await Printer.PrintAsync(
             _selected,
             Session.OperatorCode ?? "",
             Session.PageTitle,
-            new Dictionary<string, string>(_paramValues));
+            new Dictionary<string, string>(_paramValues),
+            _copies,
+            string.IsNullOrWhiteSpace(_printerName) ? null : _printerName);
 
         if (ok)
         {

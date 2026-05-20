@@ -69,15 +69,12 @@ public class PickListService
             if (locMap.TryGetValue(row.ArticleCode, out var locs))
                 row.Locations = locs;
 
-            // Aggiorna snapshot locazione principale se la riga non ce l'ha
-            if (string.IsNullOrEmpty(row.MainLocationCode))
+            // Locazione preferenziale sempre da L_MLPA LCPRC='Y' — indipendente da PAF02
+            var main = locs?.FirstOrDefault(l => l.IsMainWithdrawal);
+            if (main is not null)
             {
-                var main = locs?.FirstOrDefault(l => l.IsMainWithdrawal);
-                if (main is not null)
-                {
-                    row.MainWarehouseCode = main.WarehouseCode;
-                    row.MainLocationCode  = main.LocationCode;
-                }
+                row.MainWarehouseCode = main.WarehouseCode;
+                row.MainLocationCode  = main.LocationCode;
             }
         }
         return rows;
@@ -157,10 +154,11 @@ public class PickListService
     // ─── Esecuzione batch ─────────────────────────────────────────────────────
 
     /// <summary>
-    /// Esegue tutti i pick staged per la lista: per riga con OlCod usa TRD_InsertMov SCAR
-    /// con referenceCode=OlCod; per righe senza OlCod usa TRD_InsertMov SCAR puro.
-    /// Aggiorna ExecutedAt + ErpMovId su ogni pick completato.
-    /// Ritorna (successi, errori) per il feedback UI.
+    /// Esegue tutti i pick staged per la lista.
+    /// Raggruppa per OlCod: per ogni bolla apre S_SES (WMS_OpenPickSession),
+    /// registra ogni pick via WMS_InsertPickLine (→ S_PAP + S_SPP + TRD_InsertMov SCAR),
+    /// poi chiude la sessione (WMS_ClosePickSession).
+    /// Pick senza OlCod: fallback diretto a TRD_InsertMov SCAR.
     /// </summary>
     public async Task<(int Ok, List<string> Errors)> ExecuteStagedPicksAsync(
         Guid listId, string opCode, int nodeId)
@@ -171,34 +169,99 @@ public class PickListService
         int ok = 0;
         var errors = new List<string>();
 
-        foreach (var (pick, articleCode, articleDesc, uom, olCod) in pending)
+        // Raggruppa per OlCod (null → stringa vuota per i pick senza bolla)
+        var groups = pending
+            .GroupBy(p => p.OlCod ?? "")
+            .OrderBy(g => g.Key);
+
+        foreach (var group in groups)
         {
+            var olCod = group.Key;
+            int idSes = -1;
+
             try
             {
-                var movId = await _erp.InsertMovAsync(new ErpMovRequest(
-                    ArticleCode:   articleCode,
-                    CausalCode:    "SCAR",
-                    Qty:           pick.PickedQty,
-                    WarehouseCode: pick.WarehouseCode,
-                    LocationCode:  pick.LocationCode,
-                    OperatorCode:  opCode,
-                    ReferenceCode: olCod,
-                    NodeId:        nodeId
-                ));
-
-                if (movId <= 0)
+                // Apre la sessione ERP solo se c'è una bolla
+                if (!string.IsNullOrEmpty(olCod))
                 {
-                    errors.Add($"{articleCode}: TRD_InsertMov ha restituito {movId}");
-                    continue;
+                    var (ses, sesErr) = await _erp.OpenPickSessionAsync(olCod, opCode, nodeId);
+                    if (ses <= 0)
+                    {
+                        var msg = $"[{olCod}] Apertura sessione fallita: {sesErr}";
+                        _log.LogError(msg);
+                        foreach (var p in group)
+                            errors.Add($"{p.ArticleCode}: {msg}");
+                        continue;
+                    }
+                    idSes = ses;
                 }
 
-                await _logic.MarkPickExecutedAsync(pick.Id, movId);
-                ok++;
+                foreach (var item in group)
+                {
+                    var pick        = item.Pick;
+                    var articleCode = item.ArticleCode;
+                    var articleDesc = item.ArticleDesc;
+                    var uom         = item.UoM;
+
+                    try
+                    {
+                        int movId;
+
+                        if (idSes > 0)
+                        {
+                            var (lineOk, mov, lineErr) = await _erp.InsertPickLineAsync(
+                                olCod, articleCode, articleDesc, uom,
+                                pick.PickedQty, opCode, nodeId, idSes,
+                                pick.WarehouseCode ?? "", pick.LocationCode ?? "");
+
+                            if (!lineOk)
+                            {
+                                errors.Add($"{articleCode}: {lineErr}");
+                                continue;
+                            }
+                            movId = mov;
+                        }
+                        else
+                        {
+                            movId = await _erp.InsertMovAsync(new ErpMovRequest(
+                                ArticleCode:   articleCode,
+                                CausalCode:    "SCAR",
+                                Qty:           pick.PickedQty,
+                                WarehouseCode: pick.WarehouseCode,
+                                LocationCode:  pick.LocationCode,
+                                OperatorCode:  opCode,
+                                NodeId:        nodeId
+                            ));
+
+                            if (movId <= 0)
+                            {
+                                errors.Add($"{articleCode}: TRD_InsertMov ha restituito {movId}");
+                                continue;
+                            }
+                        }
+
+                        await _logic.MarkPickExecutedAsync(pick.Id, movId,
+                            idSes > 0 ? idSes : null);
+                        ok++;
+                    }
+                    catch (Exception ex)
+                    {
+                        _log.LogError(ex, "ExecuteStagedPicksAsync riga {Art}/{OlCod}", articleCode, olCod);
+                        errors.Add($"{articleCode}: {ex.Message}");
+                    }
+                }
             }
-            catch (Exception ex)
+            finally
             {
-                _log.LogError(ex, "ExecuteStagedPicksAsync: errore su {Art}", articleCode);
-                errors.Add($"{articleCode}: {ex.Message}");
+                // Chiude la sessione anche in caso di errori parziali
+                if (idSes > 0)
+                {
+                    try { await _erp.ClosePickSessionAsync(idSes); }
+                    catch (Exception ex)
+                    {
+                        _log.LogError(ex, "ExecuteStagedPicksAsync: ClosePickSession fallita IDSES={IdSes}", idSes);
+                    }
+                }
             }
         }
 

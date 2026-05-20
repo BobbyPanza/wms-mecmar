@@ -1,5 +1,6 @@
 using Dapper;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Options;
 using WMS.Models;
 
 namespace WMS.Services;
@@ -11,13 +12,15 @@ namespace WMS.Services;
 public class ErpService
 {
     private readonly string? _connStr;
+    private readonly string[] _allowedWarehouses;
     private readonly ILogger<ErpService> _log;
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_connStr);
 
-    public ErpService(IConfiguration config, ILogger<ErpService> log)
+    public ErpService(IConfiguration config, IOptions<WmsOptions> wmsOpts, ILogger<ErpService> log)
     {
         _connStr = config.GetConnectionString("ErpDatabase");
+        _allowedWarehouses = wmsOpts.Value.AllowedWarehouses;
         _log = log;
     }
 
@@ -94,6 +97,7 @@ public class ErpService
                   FROM dbo.S_MOV m
                   LEFT JOIN dbo.A_CMM c ON c.CMCOD = m.CMCOD
                   WHERE m.PACOD = @Code
+                    AND m.MOSTP >= DATEADD(month, -6, GETDATE())
                   ORDER BY m.MOSTP DESC",
                 new { Code = art.PACOD })).ToList();
 
@@ -170,6 +174,7 @@ public class ErpService
                   FROM dbo.S_MOV m
                   LEFT JOIN dbo.A_CMM c ON c.CMCOD = m.CMCOD
                   WHERE m.MGCOD = @MgCod AND m.LCCOD = @LcCod
+                    AND m.MOSTP >= DATEADD(month, -6, GETDATE())
                   ORDER BY m.MOSTP DESC",
                 new { MgCod = mgCod, LcCod = lcCod })).ToList();
 
@@ -215,8 +220,10 @@ public class ErpService
         try
         {
             using var db = Open();
-            var rows = await db.QueryAsync<MagRow>(
-                "SELECT MGCOD, MGDSC, MGTYP FROM dbo.A_MAG WHERE MGTYP = 'I' ORDER BY MGCOD");
+            var sql = "SELECT MGCOD, MGDSC, MGTYP FROM dbo.A_MAG WHERE MGTYP = 'I'";
+            if (_allowedWarehouses.Length > 0) sql += " AND MGCOD IN @Allowed";
+            sql += " ORDER BY MGCOD";
+            var rows = await db.QueryAsync<MagRow>(sql, new { Allowed = _allowedWarehouses });
             return rows.Select(r => new WarehouseDto(
                 Code:        r.MGCOD ?? "",
                 Description: r.MGDSC ?? "",
@@ -617,7 +624,8 @@ public class ErpService
     /// </summary>
     public async Task<(bool Ok, int IdMov, string ErrMsg)> InsertPickLineAsync(
         string olcod, string pacod, string padsc, string paudm,
-        decimal qty, string operatorCode, int nodeId, int idSes)
+        decimal qty, string operatorCode, int nodeId, int idSes,
+        string mgcod = "", string lccod = "")
     {
         try
         {
@@ -631,6 +639,8 @@ public class ErpService
             p.Add("@OPCOD",  operatorCode);
             p.Add("@NOCOD",  (short)nodeId);
             p.Add("@IDSES",  idSes);
+            p.Add("@MGCOD",  mgcod);
+            p.Add("@LCCOD",  lccod);
             p.Add("@IDMOV",  dbType: System.Data.DbType.Int32,
                              direction: System.Data.ParameterDirection.Output);
             p.Add("@ErrMsg", dbType: System.Data.DbType.String, size: 255,
@@ -697,7 +707,7 @@ public class ErpService
                     PlannedQty       = Math.Max(0, r.QtaDaPrelevare - r.QtaPrelevata),
                     OlCod            = r.OLCOD,
                     Handling         = r.Handling ?? "",
-                    MainLocationCode = r.Ubicazione ?? ""
+                    Paf02            = r.Ubicazione ?? ""
                 })
                 .Where(r => r.PlannedQty > 0)
                 .ToList();
@@ -723,12 +733,14 @@ public class ErpService
             if (codes.Count == 0) return [];
 
             using var db = Open();
-            var rows = (await db.QueryAsync<MlpaBatchRow>(
-                @"SELECT PACOD, MGCOD, LCCOD, QTLOC, LCPRC
-                  FROM dbo.L_MLPA
-                  WHERE PACOD IN @Codes AND QTLOC > 0
-                  ORDER BY PACOD, QTLOC DESC",
-                new { Codes = codes })).ToList();
+            var rows = new List<MlpaBatchRow>();
+            foreach (var chunk in Chunk(codes, 1000))
+                rows.AddRange(await db.QueryAsync<MlpaBatchRow>(
+                    @"SELECT PACOD, MGCOD, LCCOD, QTLOC, LCPRC
+                      FROM dbo.L_MLPA
+                      WHERE PACOD IN @Codes AND QTLOC > 0
+                      ORDER BY PACOD, QTLOC DESC",
+                    new { Codes = chunk }));
 
             return rows.GroupBy(r => r.PACOD ?? "")
                        .ToDictionary(
@@ -782,9 +794,10 @@ public class ErpService
         try
         {
             using var db = Open();
-            return (await db.QueryAsync<string>(
-                "SELECT DISTINCT MGCOD FROM dbo.A_LOC WHERE MGCOD IS NOT NULL ORDER BY MGCOD"
-            )).ToList();
+            var sql = "SELECT DISTINCT MGCOD FROM dbo.A_LOC WHERE MGCOD IS NOT NULL";
+            if (_allowedWarehouses.Length > 0) sql += " AND MGCOD IN @Allowed";
+            sql += " ORDER BY MGCOD";
+            return (await db.QueryAsync<string>(sql, new { Allowed = _allowedWarehouses })).ToList();
         }
         catch (Exception ex) { _log.LogError(ex, "GetAllWarehouseCodesAsync"); throw; }
     }
@@ -893,7 +906,226 @@ public class ErpService
         { _log.LogError(ex, "RemoveArticleLocationAsync {Art}/{Mg}/{Lc}", articleCode, mgCod, lcCod); throw; }
     }
 
+    // ─── Accettazione merce ──────────────────────────────────────────────────
+
+    /// <summary>
+    /// Elenco DDT da accettare da A_DOT filtrato per tipo e stato.
+    /// Ogni documento include le righe articolo da A_DOR (solo righe con PACOD valorizzato).
+    /// Colonne reali verificate sul DB: IDTES (PK), DTDO, DTSTO, DTCOD, DTDTE, IDFOR.
+    /// </summary>
+    public async Task<List<AcceptanceDocDto>> GetAcceptanceDocsAsync(int[] pendingStatuses)
+    {
+        try
+        {
+            using var db = Open();
+
+            var headers = (await db.QueryAsync<AccDocHeaderRow>(
+                @"SELECT IDTES, DTDO, DTSTO, IDFOR, DTCOD, DTDTE, FORAG
+                  FROM dbo.WMS_V_AcceptanceDocs
+                  WHERE DTSTO IN @Statuses
+                  ORDER BY DTDTE DESC",
+                new { Statuses = pendingStatuses })).ToList();
+
+            if (headers.Count == 0) return [];
+
+            var docIds = headers.Select(h => h.IDTES).ToList();
+            var lines = new List<AccDocLineRow>();
+            foreach (var chunk in Chunk(docIds, 1000))
+                lines.AddRange(await db.QueryAsync<AccDocLineRow>(
+                    @"SELECT IDRIG, IDTES, PACOD, DRDSC, DRUMI, DRQTI
+                      FROM dbo.WMS_V_AcceptanceLines
+                      WHERE IDTES IN @Ids
+                      ORDER BY IDTES, DRPOS, IDRIG",
+                    new { Ids = chunk }));
+
+            return headers.Select(h => new AcceptanceDocDto(
+                ErpDocId:     h.IDTES,
+                DocType:      h.DTDO ?? "",
+                DocumentRef:  h.DTCOD ?? h.IDTES.ToString(),
+                SupplierName: h.FORAG ?? "",
+                DocumentDate: h.DTDTE ?? DateTime.MinValue,
+                Items: lines
+                    .Where(r => r.IDTES == h.IDTES)
+                    .Select(r => new AcceptanceItemDto
+                    {
+                        ErpLineId   = r.IDRIG,
+                        ErpDocId    = h.IDTES,
+                        ArticleCode = r.PACOD ?? "",
+                        ArticleDesc = r.DRDSC ?? "",
+                        UoM         = r.DRUMI ?? "",
+                        ExpectedQty = r.DRQTI
+                    }).ToList()
+            )).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.GetAcceptanceDocsAsync");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Righe di un singolo DDT da A_DOR (solo righe con articolo).
+    /// Usata per ricaricare il dettaglio senza ricaricare tutta la lista.
+    /// </summary>
+    public async Task<List<AcceptanceItemDto>> GetAcceptanceLinesAsync(int erpDocId)
+    {
+        try
+        {
+            using var db = Open();
+            var rows = (await db.QueryAsync<AccDocLineRow>(
+                @"SELECT IDRIG, IDTES, PACOD, DRDSC, DRUMI, DRQTI
+                  FROM dbo.WMS_V_AcceptanceLines
+                  WHERE IDTES = @DocId
+                  ORDER BY DRPOS, IDRIG",
+                new { DocId = erpDocId })).ToList();
+
+            return rows.Select(r => new AcceptanceItemDto
+            {
+                ErpLineId   = r.IDRIG,
+                ErpDocId    = erpDocId,
+                ArticleCode = r.PACOD ?? "",
+                ArticleDesc = r.DRDSC ?? "",
+                UoM         = r.DRUMI ?? "",
+                ExpectedQty = r.DRQTI
+            }).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.GetAcceptanceLinesAsync DocId={DocId}", erpDocId);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Restituisce la prima locazione con il flag di accettazione attivo in A_LOC.
+    /// Colonna reale verificata: Acceptance (bit). Configurabile in AcceptanceOptions.LocationFlagColumn.
+    /// </summary>
+    public async Task<(string MgCod, string LcCod)?> GetAcceptanceDefaultLocationAsync(string flagColumn)
+    {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(flagColumn, @"^[A-Za-z_][A-Za-z0-9_]{0,63}$"))
+        {
+            _log.LogWarning("GetAcceptanceDefaultLocationAsync: nome colonna non valido '{Col}'", flagColumn);
+            return null;
+        }
+
+        try
+        {
+            using var db = Open();
+            var row = await db.QueryFirstOrDefaultAsync<LocRow>(
+                $"SELECT TOP 1 MGCOD, LCCOD FROM dbo.A_LOC WHERE [{flagColumn}] = 1");
+            if (row is null) return null;
+            return (row.MGCOD ?? "", row.LCCOD ?? "");
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.GetAcceptanceDefaultLocationAsync col={Col}", flagColumn);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Cerca locazioni in A_LOC per testo (LCCOD LIKE). Usata per il campo di ricerca locazione.
+    /// Ritorna max 30 risultati.
+    /// </summary>
+    public async Task<List<(string MgCod, string LcCod)>> SearchLocationsAsync(string query)
+    {
+        try
+        {
+            using var db = Open();
+            var sql = "SELECT TOP 30 MGCOD, LCCOD FROM dbo.A_LOC WHERE LCCOD LIKE @Q";
+            if (_allowedWarehouses.Length > 0) sql += " AND MGCOD IN @Allowed";
+            sql += " ORDER BY LCCOD";
+            var rows = (await db.QueryAsync<LocRow>(sql,
+                new { Q = query.Trim().ToUpper() + "%", Allowed = _allowedWarehouses })).ToList();
+            return rows.Select(r => (r.MGCOD ?? "", r.LCCOD ?? "")).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.SearchLocationsAsync");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Aggiorna DTSTO su A_DOT al valore "accettato" configurato.
+    /// Chiamata a chiusura documento da AcceptanceService.CompleteDocAsync.
+    /// </summary>
+    public async Task<bool> CloseAcceptanceDocAsync(int erpDocId, int acceptedStatus)
+    {
+        try
+        {
+            using var db = Open();
+            var rows = await db.ExecuteAsync(
+                "UPDATE dbo.A_DOT SET DTSTO = @Status WHERE IDTES = @DocId",
+                new { Status = acceptedStatus, DocId = erpDocId });
+            return rows > 0;
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.CloseAcceptanceDocAsync DocId={DocId}", erpDocId);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Esegue il carico merce in accettazione via TRD_InsertMov con causale configurabile.
+    /// Collega il movimento al documento DDT tramite IDRIF e alla riga tramite IDTBR.
+    /// Ritorna IDMOV (>0) oppure ≤0 se la causale non è valida.
+    /// </summary>
+    public async Task<(bool Ok, int IdMov, string Message)> ExecuteAcceptanceLoadAsync(
+        string pacod, string mgcod, string lccod, decimal qty,
+        string causal, string operatorCode,
+        int erpDocId, int erpLineId, string docRef)
+    {
+        var refCode = $"WMS-ACC-{docRef}-{DateTime.Now:yyyyMMddHHmmss}";
+        try
+        {
+            using var db = Open();
+            var p = BuildMovParams(pacod, causal, qty, mgcod, lccod, operatorCode, refCode);
+            await db.ExecuteAsync("dbo.TRD_InsertMov", p,
+                commandType: System.Data.CommandType.StoredProcedure);
+            var idMov = p.Get<int>("@ReturnVal");
+            if (idMov <= 0)
+                return (false, idMov, $"Carico {causal} fallito (IDMOV={idMov} — causale valida?)");
+            return (true, idMov, $"{causal} #{idMov}: +{qty}");
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.ExecuteAcceptanceLoadAsync {Pacod}/{DocId}", pacod, erpDocId);
+            throw;
+        }
+    }
+
+    private static IEnumerable<List<T>> Chunk<T>(IEnumerable<T> source, int size)
+    {
+        var list = source.ToList();
+        for (int i = 0; i < list.Count; i += size)
+            yield return list.Skip(i).Take(size).ToList();
+    }
+
     // ─── Row types (Dapper) ───────────────────────────────────────────────────
+
+    private class AccDocHeaderRow
+    {
+        public int       IDTES  { get; set; }   // A_DOT PK
+        public string?   DTDO   { get; set; }   // tipo documento
+        public short     DTSTO  { get; set; }   // stato documento
+        public int       IDFOR  { get; set; }
+        public string?   DTCOD  { get; set; }   // numero/codice documento
+        public DateTime? DTDTE  { get; set; }   // data documento
+        public string?   FORAG  { get; set; }   // A_FOR.FORAG
+    }
+
+    private class AccDocLineRow
+    {
+        public int      IDRIG  { get; set; }   // A_DOR PK
+        public int      IDTES  { get; set; }   // A_DOR FK → A_DOT
+        public string?  PACOD  { get; set; }
+        public string?  DRDSC  { get; set; }   // descrizione riga
+        public string?  DRUMI  { get; set; }   // unità di misura riga
+        public decimal  DRQTI  { get; set; }   // quantità attesa
+    }
 
     private class MlpaBatchRow
     {

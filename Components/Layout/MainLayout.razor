@@ -12,28 +12,26 @@
 <MudSnackbarProvider />
 
 <MudLayout>
-    <MudAppBar Dense="true" Fixed="true" Elevation="4" Style="background:#161d2f;">
+    <MudAppBar Dense="true" Fixed="true" Elevation="4" Style="background:#ffc200;">
         @if (IsHomePage)
         {
-            <div style="background:#FFC200;border-radius:8px;padding:2px 8px;margin-left:4px;display:flex;align-items:center;">
-                <img src="/images/logo.png" alt="Mecmar" style="height:28px;display:block;" />
-            </div>
+            <img src="/images/logo.png" alt="Mecmar" style="height:28px;display:block;margin-left:4px;" />
+            <MudSpacer />
         }
         else
         {
             <MudIconButton Icon="@Icons.Material.Filled.ArrowBack"
-                           Color="Color.Default"
+                           Style="color:#1e1f1f;"
                            Size="Size.Medium"
                            OnClick="GoBack"
                            title="Indietro" />
+            <MudText Class="wms-appbar-title ml-2 flex-grow-1" Style="color:#1e1f1f;font-weight:700;">@Session.PageTitle</MudText>
         }
-
-        <MudText Class="wms-appbar-title ml-2 flex-grow-1">@Session.PageTitle</MudText>
 
         @if (Session.IsLoggedIn && !string.IsNullOrEmpty(Session.PrintContext))
         {
             <MudIconButton Icon="@Icons.Material.Filled.Print"
-                           Color="Color.Default"
+                           Style="color:#1e1f1f;"
                            Size="Size.Medium"
                            OnClick="OpenPrintDialog"
                            title="Stampa" />
@@ -41,13 +39,25 @@
 
         @if (Session.IsLoggedIn)
         {
-            <MudChip T="string"
-                     Size="Size.Small"
-                     Color="@(Session.IsSupervisor ? Color.Warning : Color.Primary)"
-                     Class="mr-1"
-                     Style="max-width:120px;">
-                @Session.OperatorCode
-            </MudChip>
+            <MudMenu Dense="true" AnchorOrigin="Origin.BottomRight" TransformOrigin="Origin.TopRight">
+                <ActivatorContent>
+                    <MudButton EndIcon="@Icons.Material.Filled.ArrowDropDown"
+                               Style="color:#1e1f1f;text-transform:none;font-weight:600;min-width:0;"
+                               Size="Size.Small"
+                               OnClick="@context.ToggleAsync">
+                        @Session.OperatorCode
+                    </MudButton>
+                </ActivatorContent>
+                <ChildContent>
+                    <MudMenuItem OnClick='() => Nav.NavigateTo("/config")'>
+                        <MudIcon Icon="@Icons.Material.Filled.Settings" Size="Size.Small" Class="mr-2" />Configurazioni
+                    </MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem OnClick="Logout">
+                        <MudIcon Icon="@Icons.Material.Filled.Logout" Size="Size.Small" Class="mr-2" />Logout
+                    </MudMenuItem>
+                </ChildContent>
+            </MudMenu>
         }
     </MudAppBar>
 
@@ -65,24 +75,30 @@
     {
         PaletteDark = new PaletteDark
         {
-            Primary         = "#5B9BD5",
-            PrimaryDarken   = "#3f7db5",
-            PrimaryLighten  = "#7ab3e0",
-            Secondary       = "#D4891A",
-            Success         = "#4FAB5B",
-            Warning         = "#E8A020",
-            Error           = "#E05252",
-            Info            = "#4A9ECC",
-            Background      = "#1c2333",
-            BackgroundGray  = "#202736",
-            Surface         = "#242e42",
-            DrawerBackground = "#161d2f",
-            AppbarBackground = "#161d2f",
-            AppbarText      = "#E2E8F0",
-            TextPrimary     = "#E2E8F0",
-            TextSecondary   = "#94A3B8",
-            ActionDefault   = "#B0BDD0",
-            Divider         = "#2d3a52",
+            Primary                = "#ffc200",   // Mikado yellow
+            PrimaryDarken          = "#cc9b00",
+            PrimaryLighten         = "#ffd740",
+            PrimaryContrastText    = "#1e1f1f",   // dark text on yellow buttons
+            Secondary              = "#23A6F0",   // Pictor blue
+            SecondaryContrastText  = "#ffffff",
+            Success                = "#00C853",   // Dark pastel green
+            SuccessContrastText    = "#ffffff",
+            Warning                = "#FF8C00",   // Orange
+            WarningContrastText    = "#ffffff",
+            Error                  = "#FF1919",   // Red
+            ErrorContrastText      = "#ffffff",
+            Info                   = "#23A6F0",
+            InfoContrastText       = "#ffffff",
+            Background             = "#1e1f1f",   // Eerie black
+            BackgroundGray         = "#222222",
+            Surface                = "#252525",
+            DrawerBackground       = "#1a1a1a",
+            AppbarBackground       = "#ffc200",
+            AppbarText             = "#1e1f1f",
+            TextPrimary            = "#f0f0f0",
+            TextSecondary          = "#a1a1a1",   // Cadet gray
+            ActionDefault          = "#888888",
+            Divider                = "#3a3a3a",
         }
     };
 
@@ -153,6 +169,15 @@
     }
 
     private void GoBack() => Nav.NavigateTo("/home");
+
+    private async Task Logout()
+    {
+        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-code");
+        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-name");
+        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-role");
+        Session.Logout();
+        Nav.NavigateTo("/login");
+    }
 
     private Task OpenPrintDialog() =>
         DialogService.ShowAsync<PrintDialog>("Stampa");

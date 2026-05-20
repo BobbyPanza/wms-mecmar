@@ -1,5 +1,6 @@
 using System.Globalization;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.Extensions.Options;
 using MudBlazor.Services;
 using WMS.Components;
 using WMS.Models;
@@ -39,6 +40,17 @@ builder.Services.AddSingleton<LogicService>();
 // Singleton = servizio liste di prelievo (Logic DB + ERP)
 builder.Services.AddSingleton<PickListService>();
 
+// Opzioni generali WMS (magazzini abilitati, ecc.)
+builder.Services.Configure<WmsOptions>(
+    builder.Configuration.GetSection("Wms"));
+
+// Configurazione accettazione (sezione "Acceptance" in appsettings.json)
+builder.Services.Configure<AcceptanceOptions>(
+    builder.Configuration.GetSection("Acceptance"));
+
+// Singleton = orchestrazione accettazione merce
+builder.Services.AddSingleton<AcceptanceService>();
+
 // Singleton = servizio stampa (Intesi Printer Manager o legacy Crystal)
 builder.Services.AddHttpClient<PrintService>();
 
@@ -69,6 +81,10 @@ app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages:
 // app.UseHttpsRedirection();
 
 app.UseAntiforgery();
+var contentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+contentTypes.Mappings[".cer"] = "application/x-x509-ca-cert";
+contentTypes.Mappings[".webmanifest"] = "application/manifest+json";
+app.UseStaticFiles(new StaticFileOptions { ContentTypeProvider = contentTypes });
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();

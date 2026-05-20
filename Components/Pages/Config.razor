@@ -184,7 +184,10 @@ else
                                Style="flex:1;min-width:140px;">
                         @foreach (var k in _autoFillKeys)
                         {
-                            <MudSelectItem Value="@k">@k</MudSelectItem>
+                            <MudSelectItem Value="@k.Key">
+                                <span style="font-family:monospace;font-weight:600;">@k.Key</span>
+                                <span style="color:#94A3B8;font-size:0.78em;margin-left:6px;">@k.Desc</span>
+                            </MudSelectItem>
                         }
                     </MudSelect>
                     <MudSwitch @bind-Value="p.IsRequired" Color="Color.Warning"
@@ -210,12 +213,31 @@ else
         "INVENTORY", "ACCEPTANCE", "ADJUSTMENT", "SHIPPING"
     ];
 
-    // Chiavi auto-fill disponibili per contesto (union di tutti)
-    private static readonly string[] _autoFillKeys =
+    private record AutoFillKey(string Key, string Desc);
+
+    // Chiavi auto-fill prodotte dalle pagine WMS — Key = valore da mettere in AutoFillKey del parametro
+    private static readonly AutoFillKey[] _autoFillKeys =
     [
-        "PACOD", "LCCOD", "MGCOD", "ZONE",
-        "MGCOD_SRC", "LCCOD_SRC", "MGCOD_DST", "LCCOD_DST",
-        "QTY", "OPCOD", "DOCRIF", "SUPPLIER"
+        // ── Articolo / locazione ─────────────────────────────────────────────
+        new("PACOD",    "Codice articolo (A_PAR)"),
+        new("LCCOD",    "Codice locazione destinazione"),
+        new("MGCOD",    "Codice magazzino"),
+        // ── Documento ────────────────────────────────────────────────────────
+        new("DOCRIF",   "Riferimento documento (es. numero DDT)"),
+        new("IDRIG",    "ID riga documento (A_DOR.IDRIG)"),
+        // ── Quantità / copie ─────────────────────────────────────────────────
+        new("QTAACC",   "Quantità accettata"),
+        new("QTY",      "Quantità generica"),
+        new("COPIES",   "Numero copie (pre-compila il campo Copie — non un parametro report)"),
+        // ── Spostamento ──────────────────────────────────────────────────────
+        new("MGCOD_SRC","Magazzino sorgente (spostamento)"),
+        new("LCCOD_SRC","Locazione sorgente (spostamento)"),
+        new("MGCOD_DST","Magazzino destinazione (spostamento)"),
+        new("LCCOD_DST","Locazione destinazione (spostamento)"),
+        // ── Altro ────────────────────────────────────────────────────────────
+        new("OPCOD",    "Codice operatore"),
+        new("SUPPLIER", "Nome fornitore"),
+        new("ZONE",     "Zona magazzino"),
     ];
 
     private List<PrintTemplate> _templates   = [];

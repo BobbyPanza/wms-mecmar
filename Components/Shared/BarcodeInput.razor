@@ -29,7 +29,7 @@
 
     private async Task OnKeyDown(KeyboardEventArgs e)
     {
-        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_value))
+        if ((e.Key == "Enter" || e.Key == "Tab") && !string.IsNullOrWhiteSpace(_value))
         {
             var code = _value.Trim().ToUpper();
             _value = "";

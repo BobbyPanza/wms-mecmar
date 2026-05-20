@@ -140,23 +140,27 @@ public class MockWmsService
         _acceptanceDocs =
         [
             new(
+                ErpDocId: 1001,
+                DocType: "DCF",
                 DocumentRef: "DDT-2025-0088",
                 SupplierName: "Fornitori Meccanici SRL",
                 DocumentDate: DateTime.Today,
                 Items:
                 [
-                    new() { ArticleCode="BRU-2000", ArticleDesc="BRUCIATORE GAS 2.0 MW",   UoM="PZ", ExpectedQty=3 },
-                    new() { ArticleCode="VIT-M0820",ArticleDesc="VITE M8x20 ZN",           UoM="PZ", ExpectedQty=500 },
+                    new() { ErpLineId=1, ErpDocId=1001, ArticleCode="BRU-2000", ArticleDesc="BRUCIATORE GAS 2.0 MW",   UoM="PZ", ExpectedQty=3 },
+                    new() { ErpLineId=2, ErpDocId=1001, ArticleCode="VIT-M0820",ArticleDesc="VITE M8x20 ZN",           UoM="PZ", ExpectedQty=500 },
                 ]
             ),
             new(
+                ErpDocId: 1002,
+                DocType: "RLA",
                 DocumentRef: "DDT-2025-0091",
                 SupplierName: "Elettro Components SpA",
                 DocumentDate: DateTime.Today.AddDays(-1),
                 Items:
                 [
-                    new() { ArticleCode="RES-3KW",   ArticleDesc="RESISTENZA ELETTRICA 3KW", UoM="PZ", ExpectedQty=5 },
-                    new() { ArticleCode="FLT-OLE01", ArticleDesc="FILTRO OLIO MOTORE",       UoM="PZ", ExpectedQty=20 },
+                    new() { ErpLineId=3, ErpDocId=1002, ArticleCode="RES-3KW",   ArticleDesc="RESISTENZA ELETTRICA 3KW", UoM="PZ", ExpectedQty=5 },
+                    new() { ErpLineId=4, ErpDocId=1002, ArticleCode="FLT-OLE01", ArticleDesc="FILTRO OLIO MOTORE",       UoM="PZ", ExpectedQty=20 },
                 ]
             ),
         ];

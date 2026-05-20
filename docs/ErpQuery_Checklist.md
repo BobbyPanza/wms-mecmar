@@ -212,6 +212,79 @@ Il CDNOD viene salvato in `localStorage` del browser e ricaricato ad ogni sessio
 
 ---
 
+## 9. Accettazione merce
+
+> Implementazione in `AcceptanceService` + `ErpService` (metodi acceptance).  
+> **Le colonne sotto sono ipotesi** basate sulle naming convention ERP — da verificare e correggere con Mecmar.
+
+### Tabella testata DDT — `dbo.A_DOT` ✅ VERIFICATA
+
+| Colonna | Uso WMS | Note |
+|---------|---------|------|
+| **IDTES** | PK INT — `ErpDocId` | |
+| **DTDO** | Tipo documento (RLA / RFL / DCF) | |
+| **DTSTO** | Stato smallint (200/201 = da acc.; -4 = accettato) | valori osservati: -4,-3,200–206 |
+| **IDFOR** | FK verso `A_FOR` | |
+| **DTCOD** | Numero/codice documento (es. "2026/000057/RCL") | |
+| **DTDTE** | Data documento | |
+| **DTRIF** | Riferimento esterno (opzionale) | |
+
+Query in `ErpService.GetAcceptanceDocsAsync`:
+```sql
+SELECT t.IDTES, t.DTDO, t.DTSTO, t.IDFOR, t.DTCOD, t.DTDTE, f.FORAG
+FROM dbo.A_DOT t
+JOIN dbo.A_FOR f ON f.IDFOR = t.IDFOR
+WHERE t.DTDO IN @Types AND t.DTSTO IN @Statuses
+ORDER BY t.DTDTE DESC
+```
+
+Scrittura in `ErpService.CloseAcceptanceDocAsync`:
+```sql
+UPDATE dbo.A_DOT SET DTSTO = @Status WHERE IDTES = @DocId
+```
+
+### Tabella righe DDT — `dbo.A_DOR` ✅ VERIFICATA
+
+| Colonna | Uso WMS | Note |
+|---------|---------|------|
+| **IDRIG** | PK INT — `ErpLineId` | |
+| **IDTES** | FK verso A_DOT | |
+| **PACOD** | Codice articolo (NULL su righe note/intestazione) | filtro `PACOD IS NOT NULL` |
+| **DRDSC** | Descrizione riga | |
+| **DRUMI** | Unità di misura riga | |
+| **DRQTI** | Quantità attesa | filtro `> 0` |
+| **DRPOS** | Posizione riga (ordinamento) | |
+| **DRSTO** | Stato riga smallint | |
+
+Query in `ErpService.GetAcceptanceLinesAsync`:
+```sql
+SELECT r.IDRIG, r.IDTES, r.PACOD, r.DRDSC, r.DRUMI, r.DRQTI
+FROM dbo.A_DOR r
+WHERE r.IDTES = @DocId AND r.PACOD IS NOT NULL AND r.DRQTI > 0
+ORDER BY r.DRPOS, r.IDRIG
+```
+
+### Locazione di default accettazione — `dbo.A_LOC` ✅ VERIFICATA
+
+Colonna flag: **`Acceptance`** (bit) — nessuna locazione attualmente flaggata.  
+Configurata in `appsettings.json → Acceptance:LocationFlagColumn = "Acceptance"`.
+
+```sql
+SELECT TOP 1 MGCOD, LCCOD FROM dbo.A_LOC WHERE [Acceptance] = 1
+```
+
+**Azione richiesta:** impostare `Acceptance = 1` sulla locazione di scarico merci in `A_LOC`.
+
+| # | Scopo | Input | Output | Stato |
+|---|--------|-------|--------|-------|
+| 9.1 | **Lista DDT da accettare** (A_DOT + A_FOR) | docTypes[], pendingStatuses[] | testata + fornitore | ✅ |
+| 9.2 | **Righe DDT** (A_DOR) | IDTES | IDRIG, PACOD, DRDSC, DRUMI, DRQTI | ✅ |
+| 9.3 | **Locazione default accettazione** (A_LOC.Acceptance=1) | — | MGCOD, LCCOD | ✅ da impostare in A_LOC |
+| 9.4 | **Carico merce** (TRD_InsertMov, causale CMI) | vedi firma SP | IDMOV | ✅ |
+| 9.5 | **Chiusura documento** (UPDATE A_DOT.DTSTO) | IDTES, newStatus | rows affected | ✅ |
+
+---
+
 ## Cosa inviare tu (checklist)
 
 Per ogni riga che vi riguarda, prepara almeno uno tra:

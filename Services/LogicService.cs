@@ -94,14 +94,17 @@ public class LogicService
 
                 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_PickList')
                 CREATE TABLE dbo.WMS_PickList (
-                    Id          UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WMS_PickList PRIMARY KEY,
-                    Code        NVARCHAR(30)     NOT NULL,
-                    Description NVARCHAR(100)    NOT NULL DEFAULT '',
-                    Status      NVARCHAR(20)     NOT NULL DEFAULT 'Open',
-                    CreatedAt   DATETIME2        NOT NULL DEFAULT GETDATE(),
-                    CreatedByOp NVARCHAR(15)     NOT NULL DEFAULT '',
-                    ClosedAt    DATETIME2        NULL
+                    Id               UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WMS_PickList PRIMARY KEY,
+                    Code             NVARCHAR(30)     NOT NULL,
+                    Description      NVARCHAR(100)    NOT NULL DEFAULT '',
+                    Status           NVARCHAR(20)     NOT NULL DEFAULT 'Open',
+                    CreatedAt        DATETIME2        NOT NULL DEFAULT GETDATE(),
+                    CreatedByOp      NVARCHAR(15)     NOT NULL DEFAULT '',
+                    AssignedOperator NVARCHAR(15)     NULL,
+                    ClosedAt         DATETIME2        NULL
                 );
+                IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.WMS_PickList') AND name='AssignedOperator')
+                    ALTER TABLE dbo.WMS_PickList ADD AssignedOperator NVARCHAR(15) NULL;
 
                 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_PickListRow')
                 CREATE TABLE dbo.WMS_PickListRow (
@@ -140,11 +143,35 @@ public class LogicService
                     StagedAt      DATETIME2        NOT NULL DEFAULT GETDATE(),
                     ExecutedAt    DATETIME2        NULL,
                     ErpMovId      INT              NULL,
+                    ErpSesId      INT              NULL,
                     CONSTRAINT FK_WMS_PickListPick_Row
                         FOREIGN KEY (RowId) REFERENCES dbo.WMS_PickListRow(Id) ON DELETE CASCADE
                 );
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_PickListPick_Row')
                     CREATE INDEX IX_WMS_PickListPick_Row ON dbo.WMS_PickListPick(RowId);
+                IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.WMS_PickListPick') AND name='ErpSesId')
+                    ALTER TABLE dbo.WMS_PickListPick ADD ErpSesId INT NULL;
+
+                IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_AcceptanceLine')
+                CREATE TABLE dbo.WMS_AcceptanceLine (
+                    Id            UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WMS_AcceptanceLine PRIMARY KEY,
+                    ErpDocId      INT              NOT NULL,
+                    ErpLineId     INT              NOT NULL,
+                    ArticleCode   NVARCHAR(20)     NOT NULL,
+                    WarehouseCode NVARCHAR(15)     NOT NULL DEFAULT '',
+                    LocationCode  NVARCHAR(15)     NOT NULL,
+                    AcceptedQty   NUMERIC(18,6)    NOT NULL DEFAULT 0,
+                    ExpectedQty   NUMERIC(18,6)    NOT NULL DEFAULT 0,
+                    OperatorCode  NVARCHAR(15)     NOT NULL DEFAULT '',
+                    ErpMovId      INT              NULL,
+                    AcceptedAt    DATETIME2        NOT NULL DEFAULT GETDATE(),
+                    DocumentRef   NVARCHAR(40)     NOT NULL DEFAULT '',
+                    Notes         NVARCHAR(200)    NULL
+                );
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_AcceptanceLine_Doc')
+                    CREATE INDEX IX_WMS_AcceptanceLine_Doc ON dbo.WMS_AcceptanceLine(ErpDocId);
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_AcceptanceLine_Line')
+                    CREATE INDEX IX_WMS_AcceptanceLine_Line ON dbo.WMS_AcceptanceLine(ErpDocId, ErpLineId);
 
                 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_PrintTemplate')
                 CREATE TABLE dbo.WMS_PrintTemplate (
@@ -600,13 +627,14 @@ public class LogicService
             using var db = Open();
             var rows = (await db.QueryAsync<PickListHeaderRow>(
                 @"SELECT l.Id, l.Code, l.Description, l.Status, l.CreatedAt, l.CreatedByOp,
+                         l.AssignedOperator,
                          COUNT(r.Id)                                          AS TotalRows,
                          SUM(CASE WHEN r.RowStatus = 'Completed' THEN 1 ELSE 0 END) AS CompletedRows,
                          SUM(CASE WHEN r.IsMissing  = 1          THEN 1 ELSE 0 END) AS MissingRows
                   FROM dbo.WMS_PickList l
                   LEFT JOIN dbo.WMS_PickListRow r ON r.ListId = l.Id
                   WHERE l.Status IN ('Open','InProgress')
-                  GROUP BY l.Id, l.Code, l.Description, l.Status, l.CreatedAt, l.CreatedByOp
+                  GROUP BY l.Id, l.Code, l.Description, l.Status, l.CreatedAt, l.CreatedByOp, l.AssignedOperator
                   ORDER BY l.CreatedAt DESC")).ToList();
 
             if (rows.Count == 0) return [];
@@ -619,6 +647,7 @@ public class LogicService
 
             return rows.Select(r => new PickListHeaderDto(
                 r.Id, r.Code, r.Description, r.Status, r.CreatedAt, r.CreatedByOp,
+                r.AssignedOperator,
                 r.TotalRows, r.CompletedRows, r.MissingRows,
                 olCods.Where(o => o.ListId == r.Id).Select(o => o.OlCod).ToList()
             )).ToList();
@@ -626,16 +655,17 @@ public class LogicService
         catch (Exception ex) { _log.LogError(ex, "GetPickListsAsync"); throw; }
     }
 
-    public async Task<Guid> CreatePickListAsync(string code, string description, string opCode)
+    public async Task<Guid> CreatePickListAsync(
+        string code, string description, string opCode, string? assignedOperator = null)
     {
         try
         {
             var id = Guid.NewGuid();
             using var db = Open();
             await db.ExecuteAsync(
-                @"INSERT INTO dbo.WMS_PickList(Id, Code, Description, Status, CreatedByOp)
-                  VALUES (@Id, @Code, @Desc, 'Open', @Op)",
-                new { Id = id, Code = code, Desc = description, Op = opCode });
+                @"INSERT INTO dbo.WMS_PickList(Id, Code, Description, Status, CreatedByOp, AssignedOperator)
+                  VALUES (@Id, @Code, @Desc, 'Open', @Op, @Assigned)",
+                new { Id = id, Code = code, Desc = description, Op = opCode, Assigned = assignedOperator });
             return id;
         }
         catch (Exception ex) { _log.LogError(ex, "CreatePickListAsync"); throw; }
@@ -689,7 +719,7 @@ public class LogicService
             var rowIds = rows.Select(r => r.Id).ToList();
             var picks = (await db.QueryAsync<PickDbRow>(
                 @"SELECT Id, RowId, PickedQty, WarehouseCode, LocationCode,
-                         OperatorCode, StagedAt, ExecutedAt, ErpMovId
+                         OperatorCode, StagedAt, ExecutedAt, ErpMovId, ErpSesId
                   FROM dbo.WMS_PickListPick
                   WHERE RowId IN @Ids
                   ORDER BY StagedAt",
@@ -718,7 +748,8 @@ public class LogicService
                                      OperatorCode  = p.OperatorCode ?? "",
                                      StagedAt  = p.StagedAt,
                                      ExecutedAt = p.ExecutedAt,
-                                     ErpMovId  = p.ErpMovId
+                                     ErpMovId  = p.ErpMovId,
+                                     ErpSesId  = p.ErpSesId
                                  }).ToList()
                 };
                 return dto;
@@ -823,17 +854,17 @@ public class LogicService
         catch (Exception ex) { _log.LogError(ex, "GetPendingPicksForListAsync {ListId}", listId); throw; }
     }
 
-    public async Task MarkPickExecutedAsync(Guid pickId, int erpMovId)
+    public async Task MarkPickExecutedAsync(Guid pickId, int erpMovId, int? erpSesId = null)
     {
         try
         {
             using var db = Open();
             var rowId = await db.ExecuteScalarAsync<Guid>(
                 @"UPDATE dbo.WMS_PickListPick
-                  SET ExecutedAt=GETDATE(), ErpMovId=@Mov
+                  SET ExecutedAt=GETDATE(), ErpMovId=@Mov, ErpSesId=@Ses
                   OUTPUT INSERTED.RowId
                   WHERE Id=@Id",
-                new { Mov = erpMovId, Id = pickId });
+                new { Mov = erpMovId, Ses = erpSesId, Id = pickId });
             await UpdateListStatus(db, rowId);
         }
         catch (Exception ex) { _log.LogError(ex, "MarkPickExecutedAsync {Id}", pickId); throw; }
@@ -899,6 +930,82 @@ public class LogicService
         await UpdatePickListStatusAsync(listId);
     }
 
+    // ─── Accettazione merce ───────────────────────────────────────────────────
+
+    /// <summary>Inserisce un versamento di accettazione su WMS_AcceptanceLine.</summary>
+    public async Task InsertAcceptanceLineAsync(WmsAcceptanceLine line)
+    {
+        try
+        {
+            using var db = Open();
+            await db.ExecuteAsync(
+                @"INSERT INTO dbo.WMS_AcceptanceLine
+                      (Id, ErpDocId, ErpLineId, ArticleCode, WarehouseCode, LocationCode,
+                       AcceptedQty, ExpectedQty, OperatorCode, ErpMovId, AcceptedAt, DocumentRef, Notes)
+                  VALUES
+                      (@Id, @ErpDocId, @ErpLineId, @ArticleCode, @WarehouseCode, @LocationCode,
+                       @AcceptedQty, @ExpectedQty, @OperatorCode, @ErpMovId, @AcceptedAt, @DocumentRef, @Notes)",
+                new
+                {
+                    line.Id, line.ErpDocId, line.ErpLineId,
+                    line.ArticleCode, line.WarehouseCode, line.LocationCode,
+                    line.AcceptedQty, line.ExpectedQty, line.OperatorCode,
+                    line.ErpMovId,
+                    AcceptedAt = line.AcceptedAt == default ? DateTime.Now : line.AcceptedAt,
+                    line.DocumentRef, line.Notes
+                });
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "LogicService.InsertAcceptanceLineAsync ErpDoc={DocId} Line={LineId}", line.ErpDocId, line.ErpLineId);
+            throw;
+        }
+    }
+
+    /// <summary>Carica tutti i versamenti per un documento ERP (per popolare storico e avanzamento).</summary>
+    public async Task<List<WmsAcceptanceLine>> GetAcceptanceLinesForDocAsync(int erpDocId)
+    {
+        try
+        {
+            using var db = Open();
+            return (await db.QueryAsync<WmsAcceptanceLine>(
+                @"SELECT Id, ErpDocId, ErpLineId, ArticleCode, WarehouseCode, LocationCode,
+                         AcceptedQty, ExpectedQty, OperatorCode, ErpMovId, AcceptedAt, DocumentRef, Notes
+                  FROM dbo.WMS_AcceptanceLine
+                  WHERE ErpDocId = @DocId
+                  ORDER BY AcceptedAt",
+                new { DocId = erpDocId })).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "LogicService.GetAcceptanceLinesForDocAsync ErpDoc={DocId}", erpDocId);
+            throw;
+        }
+    }
+
+    /// <summary>Carica versamenti per più documenti in una sola query (usata nella list view).</summary>
+    public async Task<List<WmsAcceptanceLine>> GetAcceptanceLinesForDocsAsync(IEnumerable<int> erpDocIds)
+    {
+        try
+        {
+            var ids = erpDocIds.ToList();
+            if (ids.Count == 0) return [];
+            using var db = Open();
+            return (await db.QueryAsync<WmsAcceptanceLine>(
+                @"SELECT Id, ErpDocId, ErpLineId, ArticleCode, WarehouseCode, LocationCode,
+                         AcceptedQty, ExpectedQty, OperatorCode, ErpMovId, AcceptedAt, DocumentRef, Notes
+                  FROM dbo.WMS_AcceptanceLine
+                  WHERE ErpDocId IN @Ids
+                  ORDER BY ErpDocId, ErpLineId, AcceptedAt",
+                new { Ids = ids })).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "LogicService.GetAcceptanceLinesForDocsAsync");
+            throw;
+        }
+    }
+
     // ─── Row type Dapper ──────────────────────────────────────────────────────
 
     private class InvSessionRow
@@ -927,15 +1034,16 @@ public class LogicService
 
     private class PickListHeaderRow
     {
-        public Guid     Id            { get; set; }
-        public string   Code          { get; set; } = "";
-        public string   Description   { get; set; } = "";
-        public string   Status        { get; set; } = "";
-        public DateTime CreatedAt     { get; set; }
-        public string   CreatedByOp   { get; set; } = "";
-        public int      TotalRows     { get; set; }
-        public int      CompletedRows { get; set; }
-        public int      MissingRows   { get; set; }
+        public Guid     Id               { get; set; }
+        public string   Code             { get; set; } = "";
+        public string   Description      { get; set; } = "";
+        public string   Status           { get; set; } = "";
+        public DateTime CreatedAt        { get; set; }
+        public string   CreatedByOp      { get; set; } = "";
+        public string?  AssignedOperator { get; set; }
+        public int      TotalRows        { get; set; }
+        public int      CompletedRows    { get; set; }
+        public int      MissingRows      { get; set; }
     }
 
     private class PickListRowDbRow
@@ -969,6 +1077,7 @@ public class LogicService
         public DateTime  StagedAt      { get; set; }
         public DateTime? ExecutedAt    { get; set; }
         public int?      ErpMovId      { get; set; }
+        public int?      ErpSesId      { get; set; }
     }
 
     private class PendingPickRow

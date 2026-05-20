@@ -169,6 +169,7 @@ public record PickListHeaderDto(
     string       Status,
     DateTime     CreatedAt,
     string       CreatedByOp,
+    string?      AssignedOperator,  // operatore assegnato dall'ufficio
     int          TotalRows,
     int          CompletedRows,
     int          MissingRows,
@@ -188,8 +189,9 @@ public class PickListRowDto
     public string  Handling         { get; set; } = "";
     public int?    IdSpec           { get; set; }
     public int?    IdGroup          { get; set; }
+    public string  Paf02             { get; set; } = "";  // A_PAR.PAF02 — ubicazione old-style
     public string  MainWarehouseCode { get; set; } = "";
-    public string  MainLocationCode  { get; set; } = "";
+    public string  MainLocationCode  { get; set; } = "";  // L_MLPA LCPRC='Y' — locazione preferenziale
     public bool    IsMissing         { get; set; }
     public bool    IsExtraItem       { get; set; }
     public int     SortOrder         { get; set; }
@@ -226,33 +228,83 @@ public class StagedPickDto
     public DateTime  StagedAt      { get; set; }
     public DateTime? ExecutedAt    { get; set; }
     public int?      ErpMovId      { get; set; }
+    public int?      ErpSesId      { get; set; }  // S_SES.IDSES in cui è stato eseguito
     public bool      IsExecuted    => ExecutedAt.HasValue;
 }
 
-public enum PickSortField { ArticleCode, Handling, IdSpec, IdGroup, MainLocation }
+public enum PickSortField { ArticleCode, Handling, IdSpec, IdGroup, MainLocation, Paf02 }
 public enum StagingStatus  { Pending, Partial, Done, Missing }
 
 // ─── Accettazione merce ───────────────────────────────────────────────────────
 
 public record AcceptanceDocDto(
-    string DocumentRef,
-    string SupplierName,
+    int ErpDocId,          // A_DOT primary key (0 = mock)
+    string DocType,        // DTDO: RLA / RFL / DCF
+    string DocumentRef,    // numero documento
+    string SupplierName,   // A_FOR.FORAG
     DateTime DocumentDate,
     List<AcceptanceItemDto> Items
 );
 
 public class AcceptanceItemDto
 {
-    public Guid Id { get; init; } = Guid.NewGuid();
+    public Guid   Id          { get; init; } = Guid.NewGuid();
+    public int    ErpLineId   { get; set; }   // A_DOR primary key
+    public int    ErpDocId    { get; set; }   // FK to parent A_DOT
     public string ArticleCode { get; set; } = "";
     public string ArticleDesc { get; set; } = "";
-    public string UoM { get; set; } = "";
-    public decimal ExpectedQty { get; set; }
-    public decimal AcceptedQty { get; set; }
-    public decimal RemainingQty => ExpectedQty - AcceptedQty;
+    public string UoM         { get; set; } = "";
+    public decimal ExpectedQty  { get; set; }
+    public decimal AcceptedQty  { get; set; }
+    public decimal RemainingQty => Math.Max(0, ExpectedQty - AcceptedQty);
     public string? DestLocation { get; set; }
     public AcceptanceStatus Status { get; set; } = AcceptanceStatus.Pending;
+    public List<AcceptanceVersamentoDto> Versamenti { get; set; } = [];
 }
+
+/// <summary>Singolo versamento registrato per una riga DDT (da WMS_AcceptanceLine).</summary>
+public record AcceptanceVersamentoDto(
+    Guid     Id,
+    decimal  Qty,
+    string   WarehouseCode,
+    string   LocationCode,
+    string   OperatorCode,
+    DateTime AcceptedAt,
+    int?     ErpMovId
+);
+
+/// <summary>Riga versamento persistita su WMS_AcceptanceLine (Logic DB).</summary>
+public class WmsAcceptanceLine
+{
+    public Guid    Id            { get; set; } = Guid.NewGuid();
+    public int     ErpDocId      { get; set; }
+    public int     ErpLineId     { get; set; }
+    public string  ArticleCode   { get; set; } = "";
+    public string  WarehouseCode { get; set; } = "";
+    public string  LocationCode  { get; set; } = "";
+    public decimal AcceptedQty   { get; set; }
+    public decimal ExpectedQty   { get; set; }
+    public string  OperatorCode  { get; set; } = "";
+    public int?    ErpMovId      { get; set; }
+    public DateTime AcceptedAt   { get; set; } = DateTime.Now;
+    public string  DocumentRef   { get; set; } = "";
+    public string? Notes         { get; set; }
+}
+
+/// <summary>Input per AcceptanceService.AcceptLineAsync.</summary>
+public record AcceptLineRequest(
+    int     ErpDocId,
+    int     ErpLineId,
+    string  ArticleCode,
+    string  ArticleDesc,
+    string  UoM,
+    decimal Qty,
+    string  WarehouseCode,
+    string  LocationCode,
+    string  OperatorCode,
+    string  DocumentRef,
+    decimal ExpectedQty
+);
 
 // ─── Inventario ───────────────────────────────────────────────────────────────
 

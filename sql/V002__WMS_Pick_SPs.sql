@@ -48,6 +48,8 @@ CREATE OR ALTER PROCEDURE dbo.WMS_InsertPickLine
     @OPCOD  VARCHAR(15),
     @NOCOD  SMALLINT,
     @IDSES  INT,           -- IDSES aperto con WMS_OpenPickSession
+    @MGCOD  VARCHAR(15)  = '',  -- '' → locazione principale articolo
+    @LCCOD  VARCHAR(15)  = '',  -- '' → locazione principale articolo
     @IDMOV  INT OUTPUT,
     @ErrMsg VARCHAR(255) OUTPUT
 AS
@@ -78,11 +80,14 @@ BEGIN
             (@IDSPP, @SESIE, @NOCOD, @PACOD, @PAQTP, @IDSES, @IDPAP, @SESIE, 1, 0);
 
         -- Movimento SCAR (scarico produzione), IDTBR=5, collegato a IDSPP
+        -- @MGCOD/@LCCOD = '' → TRD_InsertMov usa la locazione principale dell'articolo
         DECLARE @RetVal INT;
         EXEC @RetVal = dbo.TRD_InsertMov
             @sPACOD       = @PACOD,
             @sCMCOD       = 'SCAR',
             @fMOQTV       = @PAQTP,
+            @sMGCOD       = @MGCOD,
+            @sLCCOD       = @LCCOD,
             @iIDRIF       = @IDSPP,
             @iIDTBR       = 5,
             @operatorCode = @OPCOD;
@@ -139,8 +144,12 @@ BEGIN
             RETURN;
         END
 
-        EXEC dbo.WMS_InsertPickLine @OLCOD, @PACOD, @PADSC, @PAUDM, @PAQTP, @OPCOD, @NOCOD,
-             @IDSES, @IDMOV OUTPUT, @ErrMsg OUTPUT;
+        EXEC dbo.WMS_InsertPickLine
+             @OLCOD  = @OLCOD, @PACOD = @PACOD, @PADSC = @PADSC,
+             @PAUDM  = @PAUDM, @PAQTP = @PAQTP, @OPCOD = @OPCOD,
+             @NOCOD  = @NOCOD, @IDSES = @IDSES,
+             @IDMOV  = @IDMOV  OUTPUT,
+             @ErrMsg = @ErrMsg OUTPUT;
 
         EXEC dbo.WMS_ClosePickSession @IDSES;
     END TRY

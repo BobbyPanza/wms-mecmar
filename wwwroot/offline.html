@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>WMS Mecmar — Offline</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: #1e1f1f;
+            color: #f0f0f0;
+            font-family: 'Roboto', sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100dvh;
+            gap: 24px;
+            padding: 24px;
+        }
+
+        .logo {
+            width: 80px;
+            opacity: 0.6;
+        }
+
+        .icon {
+            font-size: 64px;
+            line-height: 1;
+        }
+
+        h1 {
+            font-size: 1.4rem;
+            font-weight: 700;
+            color: #ffc200;
+            text-align: center;
+        }
+
+        p {
+            color: #a1a1a1;
+            font-size: 0.95rem;
+            text-align: center;
+            max-width: 280px;
+            line-height: 1.5;
+        }
+
+        button {
+            margin-top: 8px;
+            background: #ffc200;
+            color: #1e1f1f;
+            border: none;
+            border-radius: 8px;
+            padding: 14px 32px;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            touch-action: manipulation;
+        }
+
+        button:active {
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="icon">📡</div>
+    <h1>Connessione assente</h1>
+    <p>Il WMS richiede una connessione di rete attiva per funzionare.<br>Controlla il Wi-Fi o la rete e riprova.</p>
+    <button onclick="location.reload()">Riprova</button>
+</body>
+</html>

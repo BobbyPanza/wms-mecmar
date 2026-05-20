@@ -2,101 +2,54 @@
 @page "/home"
 
 @inject SessionService Session
-@inject MockWmsService Wms
-@inject NavigationManager Nav
-@inject IJSRuntime JS
 
 <PageTitle>Menu — WMS Mecmar</PageTitle>
-
-@* ─── Header operatore ───────────────────────────────────────────────────── *@
-<MudPaper Elevation="0" Class="pa-3 mb-3" Style="background:#1e2a40;border-radius:12px;">
-    <div class="d-flex align-center gap-3">
-        <MudAvatar Color="@(Session.IsSupervisor ? Color.Warning : Color.Primary)" Size="Size.Large">
-            @Session.OperatorCode?.Substring(0, 2).ToUpper()
-        </MudAvatar>
-        <div>
-            <MudText Typo="Typo.subtitle1" Style="font-weight:700;line-height:1.2;">
-                @Session.OperatorName
-            </MudText>
-            <MudText Typo="Typo.caption" Style="color:#7a9bb5;">
-                @Session.OperatorCode · @(Session.IsSupervisor ? "Supervisore" : "Operatore")
-            </MudText>
-        </div>
-        <MudSpacer />
-        <MudIconButton Icon="@Icons.Material.Filled.Logout"
-                       Color="Color.Default"
-                       Size="Size.Small"
-                       OnClick="Logout"
-                       title="Esci" />
-    </div>
-</MudPaper>
-
-@* ─── KPI mini ────────────────────────────────────────────────────────────── *@
-<div class="d-flex gap-2 mb-3" style="flex-wrap:wrap;">
-    <MudChip T="string" Icon="@Icons.Material.Filled.SwapHoriz" Color="Color.Primary" Size="Size.Small">
-        @Wms.GetMovementsToday() mov. oggi
-    </MudChip>
-    <MudChip T="string" Icon="@Icons.Material.Filled.Engineering" Color="Color.Secondary" Size="Size.Small">
-        @Wms.GetOpenProductionOrders() OdP aperti
-    </MudChip>
-    <MudChip T="string" Icon="@Icons.Material.Filled.Warning" Color="Color.Warning" Size="Size.Small">
-        @Wms.GetLowStockArticles() sotto scorta
-    </MudChip>
-</div>
 
 @* ─── Tile transazioni ────────────────────────────────────────────────────── *@
 <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
 
     <WmsTile Icon="@Icons.Material.Filled.Search"
              Title="Interrogazione"
-             TileColor="#4A9ECC"
+             TileColor="#1E5C8E"
              Route="/query" />
 
     <WmsTile Icon="@Icons.Material.Filled.Edit"
              Title="Rettifiche"
-             TileColor="#37474F"
+             TileColor="#3D5260"
              Route="/adjustments" />
 
     <WmsTile Icon="@Icons.Material.Filled.SwapHoriz"
              Title="Spostamento Semplice"
-             TileColor="#E65100"
+             TileColor="#7A4020"
              Route="/move/simple" />
 
     <WmsTile Icon="@Icons.Material.Filled.ShoppingCart"
              Title="Spostamento Carrello"
-             TileColor="#6A1B9A"
+             TileColor="#4A2870"
              Route="/move/cart"
              Badge="@(Session.Cart.Count > 0 ? Session.Cart.Count.ToString() : null)" />
 
-    <WmsTile Icon="@Icons.Material.Filled.PrecisionManufacturing"
-             Title="Prelievo Produzione"
-             TileColor="#B71C1C"
-             Route="/production/pick" />
 
     <WmsTile Icon="@Icons.Material.Filled.LocalShipping"
              Title="Accettazione"
-             TileColor="#00838F"
+             TileColor="#1A6B5C"
              Route="/acceptance" />
 
     <WmsTile Icon="@Icons.Material.Filled.Inventory"
              Title="Inventario"
-             TileColor="#F57F17"
+             TileColor="#6D4C0F"
              Route="/inventory" />
 
     <WmsTile Icon="@Icons.Material.Filled.FormatListBulleted"
              Title="Lista Prelievo"
-             TileColor="#2E7D32"
+             TileColor="#2A5C30"
              Route="/pick/list" />
 
     <WmsTile Icon="@Icons.Material.Filled.Warehouse"
              Title="Gestione Locazioni"
-             TileColor="#1565C0"
+             TileColor="#1A3A7A"
              Route="/locations/manage" />
 
-    <WmsTile Icon="@Icons.Material.Filled.Settings"
-             Title="Configurazione"
-             TileColor="#546E7A"
-             Route="/config" />
 
 </div>
 
@@ -104,14 +57,5 @@
     protected override void OnInitialized()
     {
         Session.SetPageTitle("WMS Mecmar");
-    }
-
-    private async Task Logout()
-    {
-        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-code");
-        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-name");
-        await JS.InvokeVoidAsync("localStorage.removeItem", "wms-op-role");
-        Session.Logout();
-        Nav.NavigateTo("/login");
     }
 }
