@@ -1,0 +1,442 @@
+@page "/admin/picklists"
+@layout AdminLayout
+@inject SessionService Session
+@inject PickListService PickSvc
+@inject LogicService Logic
+@inject ISnackbar Snackbar
+@inject NavigationManager Nav
+@inject IConfiguration Config
+@implements IDisposable
+
+<PageTitle>Liste di Prelievo — Admin WMS</PageTitle>
+
+@if (!_authorized)
+{
+    <MudAlert Severity="Severity.Error">Accesso non autorizzato.</MudAlert>
+    return;
+}
+
+<div class="d-flex align-center justify-space-between mb-4">
+    <MudText Typo="Typo.h5" Style="font-weight:700;">Liste di Prelievo</MudText>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary"
+               StartIcon="@Icons.Material.Filled.Add"
+               OnClick="OpenCreateDialog">
+        Nuova Lista
+    </MudButton>
+</div>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else
+{
+    <MudTable Items="_lists" Dense="true" Hover="true" Striped="true" Filter="FilterFunc">
+        <ToolBarContent>
+            <MudTextField @bind-Value="_search" Placeholder="Cerca codice, bolla, operatore…"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Immediate="true" Class="mt-0" />
+        </ToolBarContent>
+        <HeaderContent>
+            <MudTh>Codice / Bolla</MudTh>
+            <MudTh>Descrizione</MudTh>
+            <MudTh>Creata da</MudTh>
+            <MudTh>Assegnata a</MudTh>
+            <MudTh>Data</MudTh>
+            <MudTh>Righe</MudTh>
+            <MudTh>Stato</MudTh>
+            <MudTh></MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd Style="font-family:monospace;font-weight:600;">@context.Code</MudTd>
+            <MudTd>@context.Description</MudTd>
+            <MudTd>@context.CreatedByOp</MudTd>
+            <MudTd>@(context.AssignedOperator ?? "—")</MudTd>
+            <MudTd>@context.CreatedAt.ToString("dd/MM/yy HH:mm")</MudTd>
+            <MudTd>@context.CompletedRows / @context.TotalRows
+                @if (context.MissingRows > 0)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Error" Class="ml-1">@context.MissingRows mancanti</MudChip>
+                }
+            </MudTd>
+            <MudTd>
+                <MudChip T="string" Size="Size.Small" Color="@StatusColor(context.Status)">@context.Status</MudChip>
+            </MudTd>
+            <MudTd>
+                @if (context.Status is "Open" or "InProgress")
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.AddCircle"
+                                   Size="Size.Small" Color="Color.Primary"
+                                   Title="Aggiungi bolla"
+                                   OnClick="@(() => OpenAddBollaDialog(context))" />
+                }
+            </MudTd>
+        </RowTemplate>
+        <PagerContent>
+            <MudTablePager PageSizeOptions="new int[]{25,50,100}" />
+        </PagerContent>
+    </MudTable>
+}
+
+@* ─── Dialog NUOVA LISTA ─────────────────────────────────────────────────────── *@
+<MudDialog @bind-Visible="_createOpen"
+           Options='new DialogOptions { MaxWidth=MaxWidth.ExtraLarge, FullWidth=true, CloseOnEscapeKey=true }'>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Nuova Lista di Prelievo</MudText>
+    </TitleContent>
+    <DialogContent>
+        @* Nome lista (opzionale) *@
+        <MudTextField @bind-Value="_customCode" Label="Codice lista (lascia vuoto per usare prima bolla)"
+                      Variant="Variant.Outlined" Class="mb-3" />
+
+        @* Carica bolla *@
+        <div class="d-flex align-center gap-2 mb-2">
+            <MudTextField @bind-Value="_olCodInput" Label="Codice bolla (OLCOD)"
+                          Variant="Variant.Outlined" Style="flex:1;"
+                          Immediate="false"
+                          OnKeyDown="@(async e => { if (e.Key == "Enter") await LoadPreviewRows(); })" />
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                       StartIcon="@Icons.Material.Filled.Search"
+                       Disabled="@(string.IsNullOrWhiteSpace(_olCodInput) || _loadingPreview)"
+                       OnClick="LoadPreviewRows">
+                @if (_loadingPreview) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+                else { <span>Carica</span> }
+            </MudButton>
+        </div>
+
+        @if (_addedBollae.Count > 0)
+        {
+            <div class="d-flex flex-wrap gap-1 mb-2">
+                @foreach (var b in _addedBollae)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Info">@b</MudChip>
+                }
+            </div>
+        }
+
+        @if (_pendingRows.Count > 0)
+        {
+            <div class="d-flex align-center justify-space-between mb-1">
+                <MudText Typo="Typo.subtitle2" Style="color:#93C0DC;">
+                    @_pendingRows.Count(r => r.Selected) / @_pendingRows.Count righe selezionate
+                </MudText>
+                <div class="d-flex gap-1">
+                    <MudButton Size="Size.Small" OnClick="SelectAll">Tutti</MudButton>
+                    <MudButton Size="Size.Small" OnClick="SelectNone">Nessuno</MudButton>
+                </div>
+            </div>
+
+            <div style="max-height:420px;overflow-y:auto;">
+                <MudTable Items="_pendingRows" Dense="true" Hover="true" Striped="true"
+                          FixedHeader="true" Style="min-width:900px;">
+                    <HeaderContent>
+                        <MudTh Style="width:40px;"></MudTh>
+                        <MudTh>Articolo</MudTh>
+                        <MudTh>Descrizione</MudTh>
+                        <MudTh>Handling</MudTh>
+                        <MudTh>PAF02</MudTh>
+                        <MudTh>SpecsPart</MudTh>
+                        <MudTh>Qtà</MudTh>
+                        <MudTh>Bolla</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd>
+                            <MudCheckBox T="bool" Value="@context.Selected"
+                                         ValueChanged="@(v => context.Selected = v)"
+                                         Color="Color.Primary" Size="Size.Small" />
+                        </MudTd>
+                        <MudTd Style="font-family:monospace;font-weight:600;white-space:nowrap;">@context.Row.ArticleCode</MudTd>
+                        <MudTd>
+                            <MudTooltip Text="@context.Row.ArticleDesc">
+                                <span style="display:block;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                    @context.Row.ArticleDesc
+                                </span>
+                            </MudTooltip>
+                        </MudTd>
+                        <MudTd>
+                            @if (!string.IsNullOrEmpty(context.Row.Handling))
+                            {
+                                <MudChip T="string" Size="Size.Small" Color="Color.Warning" Variant="Variant.Outlined">
+                                    @context.Row.Handling
+                                </MudChip>
+                            }
+                        </MudTd>
+                        <MudTd Style="font-size:.82rem;color:#94A3B8;">@context.Row.Paf02</MudTd>
+                        <MudTd Style="font-size:.82rem;color:#94A3B8;">
+                            <MudTooltip Text="@(context.Row.SpecsDescription ?? "")">
+                                <span style="display:block;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                    @context.Row.SpecsDescription
+                                </span>
+                            </MudTooltip>
+                        </MudTd>
+                        <MudTd Style="font-weight:700;white-space:nowrap;">
+                            @context.Row.PlannedQty.ToString("0.###") @context.Row.UoM
+                        </MudTd>
+                        <MudTd Style="font-family:monospace;font-size:.8rem;color:#64748B;">@context.Row.OlCod</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="CloseCreateDialog">Annulla</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   StartIcon="@Icons.Material.Filled.PlaylistAdd"
+                   Disabled="@(!_pendingRows.Any(r => r.Selected) || _creating)"
+                   OnClick="CreateList">
+            @if (_creating) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else { <span>Crea Lista (@_pendingRows.Count(r => r.Selected) righe)</span> }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* ─── Dialog AGGIUNGI BOLLA a lista esistente ────────────────────────────────── *@
+<MudDialog @bind-Visible="_addBollaOpen"
+           Options='new DialogOptions { MaxWidth=MaxWidth.Large, FullWidth=true }'>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            Aggiungi bolla a <strong>@_addBollaList?.Code</strong>
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        <div class="d-flex align-center gap-2 mb-3">
+            <MudTextField @bind-Value="_addBollaOlCod" Label="Codice bolla (OLCOD)"
+                          Variant="Variant.Outlined" Style="flex:1;"
+                          OnKeyDown="@(async e => { if (e.Key == "Enter") await LoadAddBollaPreview(); })" />
+            <MudButton Variant="Variant.Filled" Color="Color.Secondary"
+                       Disabled="@(string.IsNullOrWhiteSpace(_addBollaOlCod) || _addBollaLoading)"
+                       OnClick="LoadAddBollaPreview">
+                @if (_addBollaLoading) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+                else { <span>Carica</span> }
+            </MudButton>
+        </div>
+
+        @if (_addBollaRows.Count > 0)
+        {
+            <MudAlert Severity="Severity.Info" Dense="true" Class="mb-2">
+                @_addBollaRows.Count righe trovate. Tutte verranno aggiunte alla lista.
+            </MudAlert>
+            <div style="max-height:300px;overflow-y:auto;">
+                <MudTable Items="_addBollaRows" Dense="true" Striped="true">
+                    <HeaderContent>
+                        <MudTh>Articolo</MudTh>
+                        <MudTh>Descrizione</MudTh>
+                        <MudTh>Handling</MudTh>
+                        <MudTh>PAF02</MudTh>
+                        <MudTh>SpecsPart</MudTh>
+                        <MudTh>Qtà</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd Style="font-family:monospace;font-weight:600;">@context.ArticleCode</MudTd>
+                        <MudTd>@context.ArticleDesc</MudTd>
+                        <MudTd>@context.Handling</MudTd>
+                        <MudTd Style="font-size:.82rem;color:#94A3B8;">@context.Paf02</MudTd>
+                        <MudTd Style="font-size:.82rem;color:#94A3B8;">@context.SpecsDescription</MudTd>
+                        <MudTd>@context.PlannedQty.ToString("0.###") @context.UoM</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _addBollaOpen = false)">Annulla</MudButton>
+        <MudButton Color="Color.Primary" Variant="Variant.Filled"
+                   Disabled="@(_addBollaRows.Count == 0 || _addBollaAdding)"
+                   OnClick="ConfirmAddBolla">
+            @if (_addBollaAdding) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+            else { <span>Aggiungi @_addBollaRows.Count righe</span> }
+        </MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    private List<PickListHeaderDto> _lists = [];
+    private string _search = "";
+    private bool _loading = true;
+    private bool _authorized;
+    private bool _dataLoaded;
+
+    // ─── Dialog nuova lista ───────────────────────────────────────────────────
+    private bool _createOpen;
+    private bool _creating;
+    private bool _loadingPreview;
+    private string _olCodInput = "";
+    private string _customCode = "";
+    private List<string> _addedBollae = [];
+    private List<PickRowPreview> _pendingRows = [];
+
+    // ─── Dialog aggiungi bolla ────────────────────────────────────────────────
+    private bool _addBollaOpen;
+    private bool _addBollaLoading;
+    private bool _addBollaAdding;
+    private string _addBollaOlCod = "";
+    private PickListHeaderDto? _addBollaList;
+    private List<PickListRowDto> _addBollaRows = [];
+
+    private class PickRowPreview
+    {
+        public PickListRowDto Row      { get; init; } = null!;
+        public bool           Selected { get; set; }  = true;
+    }
+
+    // ─── Auth / lifecycle ─────────────────────────────────────────────────────
+
+    protected override void OnInitialized()
+    {
+        Session.OnChange += OnSessionChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await CheckAndLoadAsync();
+    }
+
+    private async void OnSessionChanged() => await CheckAndLoadAsync();
+
+    private async Task CheckAndLoadAsync()
+    {
+        if (_dataLoaded) return;
+        var allowed = Config.GetSection("Admin:AllowedGroups").Get<string[]>() ?? [];
+        _authorized = allowed.Contains(Session.GroupCode, StringComparer.OrdinalIgnoreCase);
+        if (!_authorized) { await InvokeAsync(StateHasChanged); return; }
+        await Reload();
+    }
+
+    private async Task Reload()
+    {
+        _loading = true;
+        _lists = await Logic.GetPickListsAsync();
+        _loading = false;
+        _dataLoaded = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    // ─── Dialog nuova lista ───────────────────────────────────────────────────
+
+    private void OpenCreateDialog()
+    {
+        _createOpen    = true;
+        _olCodInput    = "";
+        _customCode    = "";
+        _addedBollae   = [];
+        _pendingRows   = [];
+    }
+
+    private void CloseCreateDialog()
+    {
+        _createOpen = false;
+    }
+
+    private async Task LoadPreviewRows()
+    {
+        var olCod = _olCodInput.Trim().ToUpper();
+        if (string.IsNullOrEmpty(olCod)) return;
+        if (_addedBollae.Contains(olCod, StringComparer.OrdinalIgnoreCase))
+        {
+            Snackbar.Add($"Bolla {olCod} già aggiunta", Severity.Warning);
+            return;
+        }
+        _loadingPreview = true;
+        try
+        {
+            var rows = await PickSvc.GetPreviewRowsAsync(olCod);
+            if (rows.Count == 0)
+            {
+                Snackbar.Add($"Bolla {olCod}: nessuna riga trovata", Severity.Warning);
+                return;
+            }
+            _addedBollae.Add(olCod);
+            _pendingRows.AddRange(rows.Select(r => new PickRowPreview { Row = r, Selected = true }));
+            _olCodInput = "";
+            if (string.IsNullOrEmpty(_customCode))
+                _customCode = olCod;
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _loadingPreview = false; }
+    }
+
+    private void SelectAll()   => _pendingRows.ForEach(r => r.Selected = true);
+    private void SelectNone()  => _pendingRows.ForEach(r => r.Selected = false);
+
+    private async Task CreateList()
+    {
+        var selectedRows = _pendingRows.Where(r => r.Selected).Select(r => r.Row).ToList();
+        if (selectedRows.Count == 0) return;
+        _creating = true;
+        try
+        {
+            var code = string.IsNullOrWhiteSpace(_customCode)
+                ? (_addedBollae.FirstOrDefault() ?? "NEW")
+                : _customCode.Trim().ToUpper();
+            var desc = $"Lista {string.Join(", ", _addedBollae)}";
+
+            await PickSvc.CreateListFromRowsAsync(code, desc, Session.OperatorCode ?? "ADMIN", selectedRows);
+            Snackbar.Add($"Lista {code} creata con {selectedRows.Count} righe", Severity.Success);
+            _createOpen = false;
+            await Reload();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _creating = false; }
+    }
+
+    // ─── Dialog aggiungi bolla ────────────────────────────────────────────────
+
+    private void OpenAddBollaDialog(PickListHeaderDto list)
+    {
+        _addBollaList  = list;
+        _addBollaOlCod = "";
+        _addBollaRows  = [];
+        _addBollaOpen  = true;
+    }
+
+    private async Task LoadAddBollaPreview()
+    {
+        var olCod = _addBollaOlCod.Trim().ToUpper();
+        if (string.IsNullOrEmpty(olCod)) return;
+        _addBollaLoading = true;
+        try
+        {
+            _addBollaRows = await PickSvc.GetPreviewRowsAsync(olCod);
+            if (_addBollaRows.Count == 0)
+                Snackbar.Add($"Bolla {olCod}: nessuna riga trovata", Severity.Warning);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _addBollaLoading = false; }
+    }
+
+    private async Task ConfirmAddBolla()
+    {
+        if (_addBollaList is null || _addBollaRows.Count == 0) return;
+        _addBollaAdding = true;
+        try
+        {
+            await PickSvc.AddBollaToListAsync(_addBollaList.Id, _addBollaOlCod.Trim().ToUpper());
+            Snackbar.Add($"{_addBollaRows.Count} righe aggiunte a {_addBollaList.Code}", Severity.Success);
+            _addBollaOpen = false;
+            await Reload();
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _addBollaAdding = false; }
+    }
+
+    // ─── Helpers ──────────────────────────────────────────────────────────────
+
+    private bool FilterFunc(PickListHeaderDto l) =>
+        string.IsNullOrEmpty(_search) ||
+        l.Code.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+        l.Description.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+        l.CreatedByOp.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+        (l.AssignedOperator?.Contains(_search, StringComparison.OrdinalIgnoreCase) ?? false) ||
+        l.OlCods.Any(o => o.Contains(_search, StringComparison.OrdinalIgnoreCase));
+
+    private Color StatusColor(string status) => status switch
+    {
+        "Completed" => Color.Success,
+        "Closed"    => Color.Default,
+        "InProgress"=> Color.Warning,
+        "Cancelled" => Color.Error,
+        _ => Color.Info
+    };
+
+    public void Dispose() => Session.OnChange -= OnSessionChanged;
+}

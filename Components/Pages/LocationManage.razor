@@ -198,7 +198,11 @@
         {
             try { _warehouses = await Erp.GetAllWarehouseCodesAsync(); }
             catch { Snackbar.Add("Errore caricamento magazzini", Severity.Error); }
-            if (_warehouses.Count > 0) _newMgCod = _warehouses[0];
+            var defaultMg = _warehouses.Contains(WmsWarehouse.Detailed)
+                            ? WmsWarehouse.Detailed
+                            : _warehouses.FirstOrDefault() ?? "";
+            _newMgCod    = defaultMg;
+            _assignMgCod = defaultMg;
         }
     }
 

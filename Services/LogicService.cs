@@ -151,6 +151,10 @@ public class LogicService
                     CREATE INDEX IX_WMS_PickListPick_Row ON dbo.WMS_PickListPick(RowId);
                 IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.WMS_PickListPick') AND name='ErpSesId')
                     ALTER TABLE dbo.WMS_PickListPick ADD ErpSesId INT NULL;
+                IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.WMS_PickListRow') AND name='Paf02')
+                    ALTER TABLE dbo.WMS_PickListRow ADD Paf02 NVARCHAR(200) NULL;
+                IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id=OBJECT_ID('dbo.WMS_PickListRow') AND name='Paf02' AND max_length < 400)
+                    ALTER TABLE dbo.WMS_PickListRow ALTER COLUMN Paf02 NVARCHAR(200) NULL;
 
                 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_AcceptanceLine')
                 CREATE TABLE dbo.WMS_AcceptanceLine (
@@ -172,6 +176,25 @@ public class LogicService
                     CREATE INDEX IX_WMS_AcceptanceLine_Doc ON dbo.WMS_AcceptanceLine(ErpDocId);
                 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_AcceptanceLine_Line')
                     CREATE INDEX IX_WMS_AcceptanceLine_Line ON dbo.WMS_AcceptanceLine(ErpDocId, ErpLineId);
+
+                IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_AcceptancePhoto')
+                CREATE TABLE dbo.WMS_AcceptancePhoto (
+                    Id           UNIQUEIDENTIFIER NOT NULL CONSTRAINT PK_WMS_AcceptancePhoto PRIMARY KEY,
+                    ErpDocId     INT              NOT NULL,
+                    ErpLineId    INT              NOT NULL,
+                    ArticleCode  NVARCHAR(20)     NOT NULL DEFAULT '',
+                    DocumentRef  NVARCHAR(40)     NOT NULL DEFAULT '',
+                    FileName     NVARCHAR(200)    NOT NULL,
+                    OperatorCode NVARCHAR(15)     NOT NULL DEFAULT '',
+                    UploadedAt   DATETIME2        NOT NULL DEFAULT GETDATE()
+                );
+                IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_WMS_AcceptancePhoto_Line')
+                    CREATE INDEX IX_WMS_AcceptancePhoto_Line ON dbo.WMS_AcceptancePhoto(ErpDocId, ErpLineId);
+
+                -- Pulizia viste create sperimentalmente in sessioni precedenti
+                IF OBJECT_ID('dbo.WMS_V_PickListDetail',      'V') IS NOT NULL DROP VIEW dbo.WMS_V_PickListDetail;
+                IF OBJECT_ID('dbo.WMS_V_PickListBolleDetail', 'V') IS NOT NULL DROP VIEW dbo.WMS_V_PickListBolleDetail;
+                -- WMS_FN_PickListBolleDetail va applicata manualmente (sql/V007) — cross-DB
 
                 IF NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'WMS_PrintTemplate')
                 CREATE TABLE dbo.WMS_PrintTemplate (
@@ -495,6 +518,88 @@ public class LogicService
         }
     }
 
+    // ─── Admin: query cruscotto ───────────────────────────────────────────────
+
+    public async Task<List<AdminInvSessionRow>> GetAdminInventorySessionsAsync()
+    {
+        try
+        {
+            using var db = Open();
+            return (await db.QueryAsync<AdminInvSessionRow>(
+                @"SELECT s.Id, s.OperatorCode, s.WarehouseCode, s.WarehouseDesc, s.Zone,
+                         s.StartedAt, s.ClosedAt,
+                         COUNT(c.Id)           AS TotalItems,
+                         SUM(c.CountedQty)     AS TotalQty,
+                         SUM(CASE WHEN c.Applied=1 THEN 1 ELSE 0 END) AS AppliedItems
+                  FROM dbo.WMS_InvSession s
+                  LEFT JOIN dbo.WMS_InvCount c ON c.SessionId = s.Id
+                  GROUP BY s.Id, s.OperatorCode, s.WarehouseCode, s.WarehouseDesc, s.Zone, s.StartedAt, s.ClosedAt
+                  ORDER BY s.StartedAt DESC")).ToList();
+        }
+        catch (Exception ex) { _log.LogError(ex, "GetAdminInventorySessionsAsync"); throw; }
+    }
+
+    public async Task<List<AdminAcceptanceRow>> GetAdminAcceptancesAsync()
+    {
+        try
+        {
+            using var db = Open();
+            return (await db.QueryAsync<AdminAcceptanceRow>(
+                @"SELECT Id, ErpDocId, ErpLineId, ArticleCode, DocumentRef, AcceptedQty, ExpectedQty,
+                         OperatorCode, AcceptedAt, ErpMovId, Notes
+                  FROM dbo.WMS_AcceptanceLine
+                  ORDER BY AcceptedAt DESC")).ToList();
+        }
+        catch (Exception ex) { _log.LogError(ex, "GetAdminAcceptancesAsync"); throw; }
+    }
+
+    // ─── Foto accettazione ────────────────────────────────────────────────────
+
+    public async Task SaveAcceptancePhotoAsync(Guid id, int erpDocId, int erpLineId,
+        string articleCode, string documentRef, string fileName, string operatorCode)
+    {
+        using var db = Open();
+        await db.ExecuteAsync("""
+            INSERT INTO dbo.WMS_AcceptancePhoto
+                (Id, ErpDocId, ErpLineId, ArticleCode, DocumentRef, FileName, OperatorCode, UploadedAt)
+            VALUES
+                (@Id, @ErpDocId, @ErpLineId, @ArticleCode, @DocumentRef, @FileName, @OperatorCode, GETDATE())
+            """,
+            new { Id = id, ErpDocId = erpDocId, ErpLineId = erpLineId,
+                  ArticleCode = articleCode, DocumentRef = documentRef,
+                  FileName = fileName, OperatorCode = operatorCode });
+    }
+
+    public async Task<AcceptancePhotoDto?> GetPhotoAsync(Guid id)
+    {
+        using var db = Open();
+        return await db.QueryFirstOrDefaultAsync<AcceptancePhotoDto>(
+            "SELECT Id,ErpDocId,ErpLineId,ArticleCode,DocumentRef,FileName,OperatorCode,UploadedAt FROM dbo.WMS_AcceptancePhoto WHERE Id=@Id",
+            new { Id = id });
+    }
+
+    public async Task<List<AcceptancePhotoDto>> GetPhotosForDocAsync(int erpDocId)
+    {
+        using var db = Open();
+        return (await db.QueryAsync<AcceptancePhotoDto>(
+            "SELECT Id,ErpDocId,ErpLineId,ArticleCode,DocumentRef,FileName,OperatorCode,UploadedAt FROM dbo.WMS_AcceptancePhoto WHERE ErpDocId=@D ORDER BY UploadedAt DESC",
+            new { D = erpDocId })).ToList();
+    }
+
+    public async Task<List<AcceptancePhotoDto>> GetPhotosForLineAsync(int erpDocId, int erpLineId)
+    {
+        using var db = Open();
+        return (await db.QueryAsync<AcceptancePhotoDto>(
+            "SELECT Id,ErpDocId,ErpLineId,ArticleCode,DocumentRef,FileName,OperatorCode,UploadedAt FROM dbo.WMS_AcceptancePhoto WHERE ErpDocId=@D AND ErpLineId=@L ORDER BY UploadedAt DESC",
+            new { D = erpDocId, L = erpLineId })).ToList();
+    }
+
+    public async Task DeletePhotoAsync(Guid id)
+    {
+        using var db = Open();
+        await db.ExecuteAsync("DELETE FROM dbo.WMS_AcceptancePhoto WHERE Id=@Id", new { Id = id });
+    }
+
     // ─── Template di stampa ───────────────────────────────────────────────────
 
     /// <summary>Restituisce tutti i template (tutti i contesti, inclusi inattivi). Per la pagina di configurazione.</summary>
@@ -620,7 +725,7 @@ public class LogicService
 
     // ─── Liste di prelievo ────────────────────────────────────────────────────
 
-    public async Task<List<PickListHeaderDto>> GetPickListsAsync()
+    public async Task<List<PickListHeaderDto>> GetPickListsAsync(string? opCode = null, bool onlyAssigned = false)
     {
         try
         {
@@ -633,9 +738,13 @@ public class LogicService
                          SUM(CASE WHEN r.IsMissing  = 1          THEN 1 ELSE 0 END) AS MissingRows
                   FROM dbo.WMS_PickList l
                   LEFT JOIN dbo.WMS_PickListRow r ON r.ListId = l.Id
-                  WHERE l.Status IN ('Open','InProgress')
+                  WHERE l.Status != 'Closed'
+                    AND (@Op IS NULL
+                         OR l.AssignedOperator = @Op
+                         OR (@OnlyAssigned = 0 AND l.CreatedByOp = @Op))
                   GROUP BY l.Id, l.Code, l.Description, l.Status, l.CreatedAt, l.CreatedByOp, l.AssignedOperator
-                  ORDER BY l.CreatedAt DESC")).ToList();
+                  ORDER BY l.CreatedAt DESC",
+                new { Op = opCode, OnlyAssigned = onlyAssigned ? 1 : 0 })).ToList();
 
             if (rows.Count == 0) return [];
 
@@ -665,7 +774,7 @@ public class LogicService
             await db.ExecuteAsync(
                 @"INSERT INTO dbo.WMS_PickList(Id, Code, Description, Status, CreatedByOp, AssignedOperator)
                   VALUES (@Id, @Code, @Desc, 'Open', @Op, @Assigned)",
-                new { Id = id, Code = code, Desc = description, Op = opCode, Assigned = assignedOperator });
+                new { Id = id, Code = code, Desc = description, Op = opCode, Assigned = assignedOperator ?? opCode });
             return id;
         }
         catch (Exception ex) { _log.LogError(ex, "CreatePickListAsync"); throw; }
@@ -679,19 +788,19 @@ public class LogicService
             await db.ExecuteAsync(
                 @"INSERT INTO dbo.WMS_PickListRow
                       (Id, ListId, ArticleCode, ArticleDesc, UoM, PlannedQty,
-                       OlCod, Handling, IdSpec, IdGroup,
+                       OlCod, Handling, IdSpec, IdGroup, Paf02,
                        MainWarehouseCode, MainLocationCode,
                        IsMissing, IsExtraItem, RowStatus, SortOrder)
                   VALUES
                       (@Id, @ListId, @ArticleCode, @ArticleDesc, @UoM, @PlannedQty,
-                       @OlCod, @Handling, @IdSpec, @IdGroup,
+                       @OlCod, @Handling, @IdSpec, @IdGroup, @Paf02,
                        @MainWh, @MainLc,
                        0, @IsExtra, 'Pending', @SortOrder)",
                 new
                 {
                     row.Id, ListId = listId,
                     row.ArticleCode, row.ArticleDesc, row.UoM, row.PlannedQty,
-                    row.OlCod, row.Handling, row.IdSpec, row.IdGroup,
+                    row.OlCod, row.Handling, row.IdSpec, row.IdGroup, row.Paf02,
                     MainWh = row.MainWarehouseCode, MainLc = row.MainLocationCode,
                     IsExtra = row.IsExtraItem, row.SortOrder
                 });
@@ -706,7 +815,7 @@ public class LogicService
             using var db = Open();
             var rows = (await db.QueryAsync<PickListRowDbRow>(
                 @"SELECT Id, ListId, ArticleCode, ArticleDesc, UoM, PlannedQty,
-                         OlCod, Handling, IdSpec, IdGroup,
+                         OlCod, Handling, IdSpec, IdGroup, Paf02,
                          MainWarehouseCode, MainLocationCode,
                          IsMissing, IsExtraItem, RowStatus, SortOrder
                   FROM dbo.WMS_PickListRow
@@ -733,6 +842,7 @@ public class LogicService
                     ArticleCode = r.ArticleCode, ArticleDesc = r.ArticleDesc, UoM = r.UoM,
                     PlannedQty = r.PlannedQty, OlCod = r.OlCod,
                     Handling = r.Handling ?? "", IdSpec = r.IdSpec, IdGroup = r.IdGroup,
+                    Paf02    = r.Paf02    ?? "",
                     MainWarehouseCode = r.MainWarehouseCode ?? "",
                     MainLocationCode  = r.MainLocationCode  ?? "",
                     IsMissing   = r.IsMissing,
@@ -1058,6 +1168,7 @@ public class LogicService
         public string?  Handling         { get; set; }
         public int?     IdSpec           { get; set; }
         public int?     IdGroup          { get; set; }
+        public string?  Paf02            { get; set; }
         public string?  MainWarehouseCode { get; set; }
         public string?  MainLocationCode  { get; set; }
         public bool     IsMissing        { get; set; }
@@ -1107,4 +1218,36 @@ public class LogicService
         public string? DstWarehouse { get; set; }
         public string? DstLocation  { get; set; }
     }
+}
+
+// ─── Admin row types (pubblici per le pagine admin) ───────────────────────────
+
+public class AdminInvSessionRow
+{
+    public Guid      Id            { get; set; }
+    public string    OperatorCode  { get; set; } = "";
+    public string    WarehouseCode { get; set; } = "";
+    public string    WarehouseDesc { get; set; } = "";
+    public string    Zone          { get; set; } = "";
+    public DateTime  StartedAt     { get; set; }
+    public DateTime? ClosedAt      { get; set; }
+    public int       TotalItems    { get; set; }
+    public decimal?  TotalQty      { get; set; }
+    public int       AppliedItems  { get; set; }
+    public bool      IsClosed => ClosedAt.HasValue;
+}
+
+public class AdminAcceptanceRow
+{
+    public Guid      Id            { get; set; }
+    public int       ErpDocId      { get; set; }
+    public int       ErpLineId     { get; set; }
+    public string    ArticleCode   { get; set; } = "";
+    public string    DocumentRef   { get; set; } = "";
+    public decimal   AcceptedQty   { get; set; }
+    public decimal   ExpectedQty   { get; set; }
+    public string    OperatorCode  { get; set; } = "";
+    public DateTime  AcceptedAt    { get; set; }
+    public int?      ErpMovId      { get; set; }
+    public string?   Notes         { get; set; }
 }

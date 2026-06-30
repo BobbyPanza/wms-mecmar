@@ -9,7 +9,20 @@ public record ArticleDto(
     decimal TotalStock,
     decimal MinStock,
     List<ArticleLocationDto> Locations,
-    List<MovementDto> RecentMovements
+    List<MovementDto> RecentMovements,
+    decimal Ordered      = 0m,   // L_PAQT.PAORD
+    decimal Engaged      = 0m,   // L_PAQT.PAIMP
+    decimal MinStockPdr  = 0m,   // A_PAR.PAPDR — scorta minima
+    List<ArticleOrderLineDto>? Orders      = null,
+    List<ArticleOrderLineDto>? Engagements = null
+);
+
+/// <summary>Riga di dettaglio ordine/impegno per articolo.</summary>
+public record ArticleOrderLineDto(
+    string    OrderCode,
+    string    Description,
+    decimal   Qty,
+    DateTime? DueDate
 );
 
 public record ArticleLocationDto(
@@ -22,6 +35,16 @@ public record ArticleLocationDto(
     decimal MaxQty,
     string Priority,       // "P" = preferenziale, "S" = secondaria
     bool IsMainWithdrawal
+);
+
+public record ArticleInfoDto(
+    string Code,
+    string Description,
+    string UoM,
+    string FamilyCode,
+    string Paf02,
+    string? Handling,
+    string? SpecsDescription
 );
 
 // ─── Locazioni ────────────────────────────────────────────────────────────────
@@ -190,6 +213,7 @@ public class PickListRowDto
     public int?    IdSpec           { get; set; }
     public int?    IdGroup          { get; set; }
     public string  Paf02             { get; set; } = "";  // A_PAR.PAF02 — ubicazione old-style
+    public string? SpecsDescription  { get; set; }
     public string  MainWarehouseCode { get; set; } = "";
     public string  MainLocationCode  { get; set; } = "";  // L_MLPA LCPRC='Y' — locazione preferenziale
     public bool    IsMissing         { get; set; }
@@ -233,6 +257,30 @@ public class StagedPickDto
 }
 
 public enum PickSortField { ArticleCode, Handling, IdSpec, IdGroup, MainLocation, Paf02 }
+
+/// <summary>Info versamento per una bolla presente nella lista di prelievo.</summary>
+public class PickListVersamentoInfoDto
+{
+    public string  PickOlCod       { get; set; } = "";  // bolla di prelievo (da WMS_PickListRow)
+    public string  BollaVersamento { get; set; } = "";  // A_LAV.OLCOD con LAUFC='Y'
+    public string  ArticleCode     { get; set; } = "";  // A_LOT.PACOD
+    public string  ArticleDesc     { get; set; } = "";
+    public string  UoM             { get; set; } = "";
+    public decimal Qty             { get; set; }        // A_LOT.LOQTP
+}
+
+public static class WmsWarehouse
+{
+    public const string Generic  = "01";
+    public const string Detailed = "MEC";
+
+    /// <summary>
+    /// Regola Mecmar: locazione "01" = magazzino generico "01",
+    /// qualsiasi altra locazione = magazzino con ubicazioni "MEC".
+    /// </summary>
+    public static string FromLocation(string locationCode) =>
+        locationCode.Trim() == Generic ? Generic : Detailed;
+}
 public enum StagingStatus  { Pending, Partial, Done, Missing }
 
 // ─── Accettazione merce ───────────────────────────────────────────────────────
@@ -258,6 +306,10 @@ public class AcceptanceItemDto
     public decimal AcceptedQty  { get; set; }
     public decimal RemainingQty => Math.Max(0, ExpectedQty - AcceptedQty);
     public string? DestLocation { get; set; }
+    /// <summary>Magazzino destinazione suggerito da L_DRCR (pre-compilato da ERP).</summary>
+    public string SuggestedWarehouseCode { get; set; } = "";
+    /// <summary>Locazione destinazione suggerita da L_DRCR (pre-compilata da ERP).</summary>
+    public string SuggestedLocationCode  { get; set; } = "";
     public AcceptanceStatus Status { get; set; } = AcceptanceStatus.Pending;
     public List<AcceptanceVersamentoDto> Versamenti { get; set; } = [];
 }
@@ -299,11 +351,13 @@ public record AcceptLineRequest(
     string  ArticleDesc,
     string  UoM,
     decimal Qty,
-    string  WarehouseCode,
-    string  LocationCode,
+    string  WarehouseCode,       // destinazione
+    string  LocationCode,        // destinazione
     string  OperatorCode,
     string  DocumentRef,
-    decimal ExpectedQty
+    decimal ExpectedQty,
+    string  SrcWarehouseCode = "", // sorgente da L_DRCR (se vuota → solo carico)
+    string  SrcLocationCode  = ""  // sorgente da L_DRCR
 );
 
 // ─── Inventario ───────────────────────────────────────────────────────────────
@@ -394,6 +448,21 @@ public record ErpMovRequest(
 
 public record WarehouseDto(string Code, string Description, string Type);
 public record LocationSummaryDto(string Code, string Description, string WarehouseCode);
+public record ArticleDocument(string Nome, string Url);
+
+// ─── Foto accettazione ───────────────────────────────────────────────────────
+
+public class AcceptancePhotoDto
+{
+    public Guid     Id           { get; set; }
+    public int      ErpDocId     { get; set; }
+    public int      ErpLineId    { get; set; }
+    public string   ArticleCode  { get; set; } = "";
+    public string   DocumentRef  { get; set; } = "";
+    public string   FileName     { get; set; } = "";
+    public string   OperatorCode { get; set; } = "";
+    public DateTime UploadedAt   { get; set; }
+}
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
 

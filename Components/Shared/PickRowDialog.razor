@@ -40,25 +40,32 @@
             <MudText Typo="Typo.caption" Style="color:#94A3B8;display:block;margin-bottom:4px;">
                 Prelievi (@Row.Picks.Count)
             </MudText>
-            <div style="display:flex;gap:6px;overflow-x:auto;margin-bottom:12px;padding-bottom:4px;">
+            <div style="margin-bottom:12px;">
                 @foreach (var pick in Row.Picks)
                 {
-                    <div style="min-width:110px;background:@(pick.IsExecuted ? "#1e3020" : "#2a2a10");
-                                border-radius:8px;padding:6px 10px;flex-shrink:0;position:relative;">
-                        <div style="font-family:monospace;font-size:.78rem;font-weight:600;">
-                            @pick.LocationCode
+                    <div style="display:flex;align-items:center;justify-content:space-between;
+                                background:@(pick.IsExecuted ? "#1e3020" : "#2a2010");
+                                border-radius:8px;padding:10px 12px;margin-bottom:6px;">
+                        <div>
+                            <div style="font-family:monospace;font-size:1rem;font-weight:700;">
+                                @pick.LocationCode
+                            </div>
+                            <div style="font-size:.7rem;color:@(pick.IsExecuted ? "#4FAB5B" : "#D4891A");font-weight:600;">
+                                @(pick.IsExecuted ? "✓ eseguito" : "⏳ staged")
+                            </div>
                         </div>
-                        <div style="color:#5B9BD5;font-weight:700;">@Fmt(pick.PickedQty)</div>
-                        <div style="font-size:.65rem;color:#64748B;">
-                            @(pick.IsExecuted ? "✓ eseguito" : "staged")
+                        <div style="display:flex;align-items:center;gap:6px;">
+                            <div style="font-size:1.25rem;font-weight:700;color:@(pick.IsExecuted ? "#4FAB5B" : "#5B9BD5");">
+                                @Fmt(pick.PickedQty) @Row.UoM
+                            </div>
+                            @if (!pick.IsExecuted)
+                            {
+                                <MudIconButton Icon="@Icons.Material.Filled.DeleteOutline"
+                                               Size="Size.Small" Color="Color.Error"
+                                               Style="min-width:0;padding:4px;"
+                                               OnClick="() => RemovePick(pick)" />
+                            }
                         </div>
-                        @if (!pick.IsExecuted)
-                        {
-                            <MudIconButton Icon="@Icons.Material.Filled.Close"
-                                           Size="Size.Small" Color="Color.Error"
-                                           Style="position:absolute;top:2px;right:2px;min-width:0;padding:2px;"
-                                           OnClick="() => RemovePick(pick)" />
-                        }
                     </div>
                 }
             </div>
@@ -103,8 +110,9 @@
 
             <MudNumericField @bind-Value="_qty" Label="Quantità"
                              Variant="Variant.Outlined"
-                             Min="0.001m" Max="@Row.PlannedQty"
-                             Step="1m" Culture="@CultureInfo.CurrentCulture"
+                             Min="1m" Max="@Row.PlannedQty"
+                             Step="1m" Format="0"
+                             Culture="@CultureInfo.CurrentCulture"
                              Class="mb-2" />
 
             <MudButton Variant="Variant.Filled" Color="Color.Primary" FullWidth="true"
@@ -171,7 +179,7 @@
     private void OnLocationScanned(string code)
     {
         _location  = code.Trim().ToUpper();
-        _warehouse = "";  // verrà determinato al momento del save
+        _warehouse = WmsWarehouse.FromLocation(_location);
     }
 
     private void SelectLocation(string lc, string mg)

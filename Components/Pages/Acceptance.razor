@@ -1,12 +1,16 @@
 @page "/acceptance"
 
 @using System.Globalization
+@using Microsoft.AspNetCore.Components.Forms
 @inject SessionService Session
 @inject AcceptanceService Svc
 @inject MockWmsService Mock
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
 @inject IDialogService DialogService
+@inject IConfiguration Config
+@inject LogicService Logic
+@inject IJSRuntime JS
 
 <PageTitle>Accettazione</PageTitle>
 
@@ -108,6 +112,12 @@ else if (_selectedItem is null)
                             <MudText Typo="Typo.caption" Style="color:#94A3B8;word-break:break-word;">
                                 @item.ArticleDesc
                             </MudText>
+                            @if (!string.IsNullOrEmpty(item.SuggestedLocationCode))
+                            {
+                                <MudText Typo="Typo.caption" Style="color:#4FAB5B;font-family:monospace;">
+                                    <MudIcon Icon="@Icons.Material.Filled.LocationOn" Size="Size.Small" /> @item.SuggestedLocationCode
+                                </MudText>
+                            }
                         </div>
                         <div class="d-flex flex-column align-end ml-2 gap-1">
                             @if (item.Status == AcceptanceStatus.Done)
@@ -173,6 +183,20 @@ else if (_selectedItem is null)
                             </div>
                         }
                     }
+                    @* Bottone allega foto *@
+                    <div class="px-2 pt-2 pb-1 d-flex align-center gap-2">
+                        <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Info"
+                                   StartIcon="@Icons.Material.Filled.CameraAlt"
+                                   Disabled="@_uploading"
+                                   OnClick="@(() => OpenCameraFor(item))">
+                            Allega foto
+                        </MudButton>
+                        @{ var cnt = _photoCountByLine.GetValueOrDefault(item.ErpLineId); }
+                        @if (cnt > 0)
+                        {
+                            <MudChip T="string" Size="Size.Small" Color="Color.Info">@cnt</MudChip>
+                        }
+                    </div>
                 </ChildContent>
             </MudExpansionPanel>
         }
@@ -283,8 +307,8 @@ else
         <MudNumericField @bind-Value="_acceptQty"
                          Label="@($"Quantità ({_selectedItem.UoM})")"
                          Variant="Variant.Outlined"
-                         Min="0.001m" Max="@_selectedItem.RemainingQty"
-                         Step="1m" Class="mb-3" />
+                         Min="1m" Max="@_selectedItem.RemainingQty"
+                         Step="1m" Format="0" Class="mb-3" />
 
         @* Riepilogo *@
         <MudPaper Class="pa-3 mb-3" Style="border-radius:10px;background:#1e2d24;">
@@ -311,6 +335,13 @@ else
 
         @if (_lastAcceptedOk)
         {
+            <MudButton Variant="Variant.Outlined" Color="Color.Info" FullWidth="true"
+                       Size="Size.Large" StartIcon="@Icons.Material.Filled.CameraAlt"
+                       Class="mb-2" Disabled="@_uploading"
+                       OnClick="@(() => OpenCameraFor(_selectedItem!))">
+                @if (_uploading) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
+                else { <span>ALLEGA FOTO</span> }
+            </MudButton>
             <MudButton Variant="Variant.Outlined" Color="Color.Success" FullWidth="true"
                        Size="Size.Large" StartIcon="@Icons.Material.Filled.Print"
                        Class="mb-2" OnClick="PrintCurrentLabel">
@@ -332,6 +363,20 @@ else
             }
         </MudButton>
     }
+}
+
+@* Input file nascosto per la fotocamera *@
+<InputFile id="wms-acc-photo" accept="image/*" style="display:none"
+           OnChange="OnPhotoFileSelected"
+           @attributes='new Dictionary<string,object>{["capture"]="environment"}' />
+
+@* Lightbox foto *@
+@if (_lightboxUrl is not null)
+{
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:flex;align-items:center;justify-content:center;"
+         @onclick="() => _lightboxUrl = null">
+        <img src="@_lightboxUrl" style="max-width:100%;max-height:100%;object-fit:contain;" />
+    </div>
 }
 
 @code {
@@ -362,6 +407,12 @@ else
 
     // Righe dichiarate mancanti (ErpLineId)
     private HashSet<int> _missingItems = [];
+
+    // Foto
+    private AcceptanceItemDto? _photoTargetItem;
+    private bool _uploading;
+    private Dictionary<int, int> _photoCountByLine = [];
+    private string? _lightboxUrl;
 
     private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
 
@@ -435,6 +486,19 @@ else
             ["SUPPLIER"] = d.SupplierName,
             ["DOCTYPE"]  = d.DocType
         });
+
+        // Conta foto esistenti per ogni riga
+        _photoCountByLine = [];
+        if (Logic.IsConfigured && d.ErpDocId > 0)
+        {
+            try
+            {
+                var photos = await Logic.GetPhotosForDocAsync(d.ErpDocId);
+                _photoCountByLine = photos.GroupBy(p => p.ErpLineId)
+                                          .ToDictionary(g => g.Key, g => g.Count());
+            }
+            catch { }
+        }
     }
 
     private void BackToList()
@@ -451,13 +515,17 @@ else
         _selectedItem   = item;
         _lastAcceptedOk = false;
 
-        // Pre-imposta la locazione default se non già selezionata
-        if (string.IsNullOrEmpty(_destLcCod))
-            UseDefaultLocation();
-        else
+        // Priorità: locazione da L_DRCR > locazione già selezionata > default accettazione
+        if (!string.IsNullOrEmpty(item.SuggestedLocationCode))
         {
-            // mantieni la locazione già selezionata
+            _destMgCod = item.SuggestedWarehouseCode;
+            _destLcCod = item.SuggestedLocationCode;
         }
+        else if (string.IsNullOrEmpty(_destLcCod))
+        {
+            UseDefaultLocation();
+        }
+        // else: mantieni la locazione già selezionata
 
         _acceptQty = item.RemainingQty;
     }
@@ -545,7 +613,9 @@ else
                     LocationCode:  _destLcCod,
                     OperatorCode:  Session.OperatorCode ?? "",
                     DocumentRef:   _selectedDoc.DocumentRef,
-                    ExpectedQty:   _selectedItem.ExpectedQty
+                    ExpectedQty:   _selectedItem.ExpectedQty,
+                    SrcWarehouseCode: _selectedItem.SuggestedWarehouseCode,
+                    SrcLocationCode:  _selectedItem.SuggestedLocationCode
                 );
                 (ok, msg) = await Svc.AcceptLineAsync(req);
             }
@@ -631,6 +701,65 @@ else
         }
         catch (Exception ex) { Snackbar.Add($"Errore: {ex.Message}", Severity.Error); }
         finally { _completing = false; }
+    }
+
+    // ─── Foto ────────────────────────────────────────────────────────────────
+
+    private async Task OpenCameraFor(AcceptanceItemDto item)
+    {
+        _photoTargetItem = item;
+        await JS.InvokeVoidAsync("eval", "document.getElementById('wms-acc-photo').click()");
+    }
+
+    private async Task OnPhotoFileSelected(InputFileChangeEventArgs e)
+    {
+        if (_photoTargetItem is null || _selectedDoc is null) return;
+        var file = e.File;
+        _uploading = true;
+        StateHasChanged();
+        try
+        {
+            var storagePath = Config["AcceptancePhotos:StoragePath"];
+            if (string.IsNullOrEmpty(storagePath))
+            {
+                Snackbar.Add("Percorso foto non configurato (AcceptancePhotos:StoragePath)", Severity.Error);
+                return;
+            }
+            Directory.CreateDirectory(storagePath);
+
+            var ext = Path.GetExtension(file.Name).ToLowerInvariant() switch
+            {
+                ".jpg" or ".jpeg" => ".jpg",
+                ".png"  => ".png",
+                ".webp" => ".webp",
+                _ => ".jpg"
+            };
+            var id = Guid.NewGuid();
+            var fileName = $"{id}{ext}";
+            var filePath = Path.Combine(storagePath, fileName);
+
+            await using (var stream = File.Create(filePath))
+                await file.OpenReadStream(maxAllowedSize: 15 * 1024 * 1024).CopyToAsync(stream);
+
+            await Logic.SaveAcceptancePhotoAsync(id,
+                _selectedDoc.ErpDocId, _photoTargetItem.ErpLineId,
+                _photoTargetItem.ArticleCode, _selectedDoc.DocumentRef,
+                fileName, Session.OperatorCode ?? "");
+
+            _photoCountByLine[_photoTargetItem.ErpLineId] =
+                _photoCountByLine.GetValueOrDefault(_photoTargetItem.ErpLineId) + 1;
+
+            Snackbar.Add("Foto allegata", Severity.Success);
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore foto: {ex.Message}", Severity.Error);
+        }
+        finally
+        {
+            _uploading = false;
+            _photoTargetItem = null;
+        }
     }
 
     // ─── Stampa etichetta ────────────────────────────────────────────────────

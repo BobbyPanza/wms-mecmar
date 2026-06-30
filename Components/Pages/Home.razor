@@ -2,60 +2,89 @@
 @page "/home"
 
 @inject SessionService Session
+@inject NavigationManager Nav
 
 <PageTitle>Menu — WMS Mecmar</PageTitle>
 
 @* ─── Tile transazioni ────────────────────────────────────────────────────── *@
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+<div @ref="_grid" tabindex="0" @onkeydown="OnKeyDown"
+     style="display:grid;grid-template-columns:1fr 1fr;gap:6px;outline:none;">
 
     <WmsTile Icon="@Icons.Material.Filled.Search"
              Title="Interrogazione"
              TileColor="#1E5C8E"
-             Route="/query" />
+             Route="/query"
+             KeyNum="1" />
 
     <WmsTile Icon="@Icons.Material.Filled.Edit"
              Title="Rettifiche"
              TileColor="#3D5260"
-             Route="/adjustments" />
+             Route="/adjustments"
+             KeyNum="2" />
 
     <WmsTile Icon="@Icons.Material.Filled.SwapHoriz"
              Title="Spostamento Semplice"
              TileColor="#7A4020"
-             Route="/move/simple" />
+             Route="/move/simple"
+             KeyNum="3" />
 
     <WmsTile Icon="@Icons.Material.Filled.ShoppingCart"
              Title="Spostamento Carrello"
              TileColor="#4A2870"
              Route="/move/cart"
-             Badge="@(Session.Cart.Count > 0 ? Session.Cart.Count.ToString() : null)" />
-
+             Badge="@(Session.Cart.Count > 0 ? Session.Cart.Count.ToString() : null)"
+             KeyNum="4" />
 
     <WmsTile Icon="@Icons.Material.Filled.LocalShipping"
              Title="Accettazione"
              TileColor="#1A6B5C"
-             Route="/acceptance" />
+             Route="/acceptance"
+             KeyNum="5" />
 
     <WmsTile Icon="@Icons.Material.Filled.Inventory"
              Title="Inventario"
              TileColor="#6D4C0F"
-             Route="/inventory" />
+             Route="/inventory"
+             KeyNum="6" />
 
     <WmsTile Icon="@Icons.Material.Filled.FormatListBulleted"
              Title="Lista Prelievo"
              TileColor="#2A5C30"
-             Route="/pick/list" />
+             Route="/pick/list"
+             KeyNum="7" />
 
     <WmsTile Icon="@Icons.Material.Filled.Warehouse"
              Title="Gestione Locazioni"
              TileColor="#1A3A7A"
-             Route="/locations/manage" />
-
+             Route="/locations/manage"
+             KeyNum="8" />
 
 </div>
 
 @code {
-    protected override void OnInitialized()
+    private ElementReference _grid;
+
+    protected override void OnInitialized() => Session.SetPageTitle("WMS Mecmar");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        Session.SetPageTitle("WMS Mecmar");
+        if (firstRender) await _grid.FocusAsync();
+    }
+
+    private void OnKeyDown(KeyboardEventArgs e)
+    {
+        var route = e.Key switch
+        {
+            "1" => "/query",
+            "2" => "/adjustments",
+            "3" => "/move/simple",
+            "4" => "/move/cart",
+            "5" => "/acceptance",
+            "6" => "/inventory",
+            "7" => "/pick/list",
+            "8" => "/locations/manage",
+            _   => null
+        };
+        if (route is not null) Nav.NavigateTo(route);
     }
 }

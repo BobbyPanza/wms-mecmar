@@ -1,0 +1,238 @@
+@page "/admin/acceptance"
+@layout AdminLayout
+@inject SessionService Session
+@inject LogicService Logic
+@inject NavigationManager Nav
+@inject IConfiguration Config
+@inject ISnackbar Snackbar
+@inject HttpClient Http
+@implements IDisposable
+
+<PageTitle>Accettazioni — Admin WMS</PageTitle>
+
+@if (!_authorized)
+{
+    <MudAlert Severity="Severity.Error">Accesso non autorizzato.</MudAlert>
+    return;
+}
+
+<MudText Typo="Typo.h5" Class="mb-4" Style="font-weight:700;">Accettazioni Effettuate</MudText>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else
+{
+    <MudTable Items="_rows" Dense="true" Hover="true" Striped="true" Filter="FilterFunc"
+              GroupBy="_groupByOp ? _groupDef : null">
+        <ToolBarContent>
+            <MudTextField @bind-Value="_search" Placeholder="Cerca articolo, documento, operatore…"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Immediate="true" Class="mt-0 mr-4" Style="max-width:320px;" />
+            <MudSwitch @bind-Value="_groupByOp" Color="Color.Primary" Label="Raggruppa per operatore" />
+        </ToolBarContent>
+        <HeaderContent>
+            <MudTh>Articolo</MudTh>
+            <MudTh>Documento</MudTh>
+            <MudTh>Qtà accettata</MudTh>
+            <MudTh>Qtà attesa</MudTh>
+            <MudTh>Operatore</MudTh>
+            <MudTh>Data/ora</MudTh>
+            <MudTh>MOV ERP</MudTh>
+            <MudTh>Foto</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd Style="font-family:monospace;">@context.ArticleCode</MudTd>
+            <MudTd>@context.DocumentRef</MudTd>
+            <MudTd Style="font-weight:600;">@context.AcceptedQty.ToString("N2")</MudTd>
+            <MudTd Style="color:#94A3B8;">@context.ExpectedQty.ToString("N2")</MudTd>
+            <MudTd>
+                <MudChip T="string" Size="Size.Small" Color="Color.Info">@context.OperatorCode</MudChip>
+            </MudTd>
+            <MudTd>@context.AcceptedAt.ToString("dd/MM/yy HH:mm")</MudTd>
+            <MudTd Style="font-family:monospace;font-size:0.8rem;color:#94A3B8;">
+                @(context.ErpMovId?.ToString() ?? "—")
+            </MudTd>
+            <MudTd>
+                @{ var photoCount = _photoCountByLine.GetValueOrDefault(context.ErpLineId); }
+                <MudIconButton Icon="@Icons.Material.Filled.PhotoLibrary"
+                               Size="Size.Small"
+                               Color="@(photoCount > 0 ? Color.Info : Color.Default)"
+                               Title="@(photoCount > 0 ? $"{photoCount} foto" : "Nessuna foto")"
+                               OnClick="@(() => OpenPhotoGallery(context))" />
+                @if (photoCount > 0)
+                {
+                    <MudText Typo="Typo.caption" Style="color:#23A6F0;">@photoCount</MudText>
+                }
+            </MudTd>
+        </RowTemplate>
+        <PagerContent>
+            <MudTablePager PageSizeOptions="new int[]{25,50,100}" />
+        </PagerContent>
+    </MudTable>
+}
+
+@* ─── Dialog galleria foto ────────────────────────────────────────────────── *@
+<MudDialog @bind-Visible="_galleryOpen" Options='new DialogOptions { MaxWidth=MaxWidth.Large, FullWidth=true }'>
+    <TitleContent>
+        <MudText Typo="Typo.h6">
+            <MudIcon Icon="@Icons.Material.Filled.PhotoLibrary" Class="mr-2" />
+            Foto — @_galleryRow?.ArticleCode (@_galleryRow?.DocumentRef)
+        </MudText>
+    </TitleContent>
+    <DialogContent>
+        @if (_galleryLoading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_galleryPhotos.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info">Nessuna foto per questa riga.</MudAlert>
+        }
+        else
+        {
+            <div style="display:flex;flex-wrap:wrap;gap:12px;">
+                @foreach (var p in _galleryPhotos)
+                {
+                    <div style="position:relative;">
+                        <img src="/api/acceptance-photo/@p.Id"
+                             style="width:160px;height:160px;object-fit:cover;border-radius:8px;cursor:pointer;"
+                             @onclick="@(() => _lightboxUrl = $"/api/acceptance-photo/{p.Id}")" />
+                        <div style="font-size:.7rem;color:#94A3B8;text-align:center;">
+                            @p.OperatorCode — @p.UploadedAt.ToString("dd/MM HH:mm")
+                        </div>
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete"
+                                       Size="Size.Small" Color="Color.Error"
+                                       Style="position:absolute;top:2px;right:2px;background:rgba(0,0,0,.5);"
+                                       OnClick="@(() => DeletePhoto(p))" />
+                    </div>
+                }
+            </div>
+        }
+    </DialogContent>
+    <DialogActions>
+        <MudButton OnClick="@(() => _galleryOpen = false)">Chiudi</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@* Lightbox *@
+@if (_lightboxUrl is not null)
+{
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:flex;align-items:center;justify-content:center;"
+         @onclick="() => _lightboxUrl = null">
+        <img src="@_lightboxUrl" style="max-width:100%;max-height:100%;object-fit:contain;" />
+    </div>
+}
+
+@code {
+    private List<AdminAcceptanceRow> _rows = [];
+    private string _search = "";
+    private bool _loading = true;
+    private bool _authorized;
+    private bool _groupByOp;
+    private bool _dataLoaded;
+
+    // Foto
+    private Dictionary<int, int> _photoCountByLine = [];
+    private bool _galleryOpen;
+    private bool _galleryLoading;
+    private AdminAcceptanceRow? _galleryRow;
+    private List<AcceptancePhotoDto> _galleryPhotos = [];
+    private string? _lightboxUrl;
+
+    private TableGroupDefinition<AdminAcceptanceRow> _groupDef = new()
+    {
+        GroupName    = "Operatore",
+        Indentation  = false,
+        Expandable   = true,
+        IsInitiallyExpanded = true,
+        Selector     = r => r.OperatorCode
+    };
+
+    protected override void OnInitialized()
+    {
+        Session.OnChange += OnSessionChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await CheckAndLoadAsync();
+    }
+
+    private async void OnSessionChanged()
+    {
+        await CheckAndLoadAsync();
+    }
+
+    private async Task CheckAndLoadAsync()
+    {
+        if (_dataLoaded) return;
+        var allowed = Config.GetSection("Admin:AllowedGroups").Get<string[]>() ?? [];
+        _authorized = allowed.Contains(Session.GroupCode, StringComparer.OrdinalIgnoreCase);
+        if (!_authorized) { await InvokeAsync(StateHasChanged); return; }
+
+        _rows = await Logic.GetAdminAcceptancesAsync();
+
+        // Carica conteggi foto per tutte le righe
+        try
+        {
+            // Raggruppa per ErpDocId per minimizzare le query
+            foreach (var docId in _rows.Select(r => r.ErpDocId).Distinct())
+            {
+                var photos = await Logic.GetPhotosForDocAsync(docId);
+                foreach (var g in photos.GroupBy(p => p.ErpLineId))
+                    _photoCountByLine[g.Key] = g.Count();
+            }
+        }
+        catch { }
+
+        _loading = false;
+        _dataLoaded = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task OpenPhotoGallery(AdminAcceptanceRow row)
+    {
+        _galleryRow = row;
+        _galleryPhotos = [];
+        _galleryLoading = true;
+        _galleryOpen = true;
+        try
+        {
+            _galleryPhotos = await Logic.GetPhotosForLineAsync(row.ErpDocId, row.ErpLineId);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        finally { _galleryLoading = false; }
+    }
+
+    private async Task DeletePhoto(AcceptancePhotoDto photo)
+    {
+        try
+        {
+            var storagePath = Config["AcceptancePhotos:StoragePath"];
+            if (!string.IsNullOrEmpty(storagePath))
+            {
+                var path = Path.Combine(storagePath, photo.FileName);
+                if (File.Exists(path)) File.Delete(path);
+            }
+            await Logic.DeletePhotoAsync(photo.Id);
+            _galleryPhotos.Remove(photo);
+            if (_galleryRow is not null)
+            {
+                _photoCountByLine[_galleryRow.ErpLineId] =
+                    Math.Max(0, _photoCountByLine.GetValueOrDefault(_galleryRow.ErpLineId) - 1);
+            }
+            Snackbar.Add("Foto eliminata", Severity.Success);
+        }
+        catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+    }
+
+    public void Dispose() => Session.OnChange -= OnSessionChanged;
+
+    private bool FilterFunc(AdminAcceptanceRow r) =>
+        string.IsNullOrEmpty(_search) ||
+        r.ArticleCode.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+        r.DocumentRef.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+        r.OperatorCode.Contains(_search, StringComparison.OrdinalIgnoreCase);
+}

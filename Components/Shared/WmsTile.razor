@@ -1,9 +1,14 @@
 @inject NavigationManager Nav
 
-<MudPaper Class="wms-tile pa-3 d-flex flex-column align-center justify-center"
-          Style="@($"background:{TileColor};{(Wide ? "width:100%;" : "")}")"
+<MudPaper Class="wms-tile pa-2 d-flex flex-column align-center justify-center"
+          Style="@($"background:{TileColor};position:relative;{(Wide ? "width:100%;" : "")}")"
           Elevation="4"
           @onclick="() => Nav.NavigateTo(Route)">
+
+    @if (KeyNum is not null)
+    {
+        <span style="position:absolute;top:5px;left:7px;font-size:12px;color:rgba(255,255,255,0.55);font-weight:700;line-height:1;user-select:none;">@KeyNum</span>
+    }
 
     <div style="position:relative;display:inline-block;">
         <MudIcon Icon="@Icon" Style="font-size:2.6rem;color:rgba(255,255,255,0.88);" Class="wms-tile-icon" />
@@ -26,6 +31,7 @@
     [Parameter, EditorRequired] public string Title     { get; set; } = "";
     [Parameter, EditorRequired] public string TileColor { get; set; } = "#2A5C8A";
     [Parameter, EditorRequired] public string Route     { get; set; } = "/";
-    [Parameter] public string? Badge { get; set; }
-    [Parameter] public bool Wide { get; set; }
+    [Parameter] public string? Badge  { get; set; }
+    [Parameter] public int?    KeyNum { get; set; }
+    [Parameter] public bool    Wide   { get; set; }
 }

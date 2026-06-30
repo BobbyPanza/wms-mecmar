@@ -6,6 +6,7 @@
 @inject ErpService Erp
 @inject ISnackbar Snackbar
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <PageTitle>Spostamento Semplice</PageTitle>
 
@@ -176,8 +177,7 @@
                      Step="0.001m"
                      Culture="@CultureInfo.CurrentCulture"
                      Style="font-size:1.5rem;"
-                     Class="mb-3"
-                     AutoFocus="true" />
+                     Class="mb-3 wms-qty-focus" />
 
     @if (_qty > _sourceQty)
     {
@@ -257,6 +257,22 @@
     private bool _confirming;
 
     private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    private int _lastStepFocused = -1;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_step == 3 && _lastStepFocused != 3)
+        {
+            _lastStepFocused = 3;
+            await JS.InvokeVoidAsync("eval",
+                "setTimeout(()=>{var el=document.querySelector('.wms-qty-focus input');if(el){el.focus();el.select();}},80)");
+        }
+        else if (_step != 3)
+        {
+            _lastStepFocused = _step;
+        }
+    }
 
     protected override void OnInitialized()
     {

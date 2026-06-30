@@ -4,7 +4,7 @@
   "description": "Warehouse Management System — Mecmar",
   "start_url": "/home",
   "display": "standalone",
-  "orientation": "portrait",
+  "orientation": "portrait-primary",
   "background_color": "#1e1f1f",
   "theme_color": "#ffc200",
   "lang": "it",

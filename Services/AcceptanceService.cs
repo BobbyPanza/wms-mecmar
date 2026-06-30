@@ -67,8 +67,10 @@ public class AcceptanceService
     {
         var (ok, idMov, msg) = await _erp.ExecuteAcceptanceLoadAsync(
             req.ArticleCode, req.WarehouseCode, req.LocationCode, req.Qty,
-            _opts.LoadCausal, req.OperatorCode,
-            req.ErpDocId, req.ErpLineId, req.DocumentRef);
+            _opts.LoadCausal, _opts.DischargeCausal, req.OperatorCode,
+            req.ErpDocId, req.ErpLineId, req.DocumentRef,
+            srcMgcod: req.SrcWarehouseCode,
+            srcLccod: req.SrcLocationCode);
 
         if (!ok) return (false, msg);
 

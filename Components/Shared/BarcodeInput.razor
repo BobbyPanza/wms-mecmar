@@ -13,6 +13,7 @@
               Disabled="@Disabled"
               Class="wms-barcode-field"
               OnKeyDown="OnKeyDown"
+              OnBlur="OnBlur"
               Immediate="true"
               AutoFocus="@AutoFocus"
               InputType="InputType.Text" />
@@ -22,6 +23,7 @@
     [Parameter] public string Placeholder { get; set; } = "";
     [Parameter] public bool Disabled { get; set; }
     [Parameter] public bool AutoFocus { get; set; } = true;
+    [Parameter] public bool SubmitOnBlur { get; set; } = false;
     [Parameter] public EventCallback<string> OnCodeScanned { get; set; }
 
     private MudTextField<string>? _field;
@@ -30,6 +32,16 @@
     private async Task OnKeyDown(KeyboardEventArgs e)
     {
         if ((e.Key == "Enter" || e.Key == "Tab") && !string.IsNullOrWhiteSpace(_value))
+        {
+            var code = _value.Trim().ToUpper();
+            _value = "";
+            await OnCodeScanned.InvokeAsync(code);
+        }
+    }
+
+    private async Task OnBlur(FocusEventArgs e)
+    {
+        if (SubmitOnBlur && !string.IsNullOrWhiteSpace(_value))
         {
             var code = _value.Trim().ToUpper();
             _value = "";

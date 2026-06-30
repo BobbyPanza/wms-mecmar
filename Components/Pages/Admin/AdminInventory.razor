@@ -1,0 +1,110 @@
+@page "/admin/inventory"
+@layout AdminLayout
+@inject SessionService Session
+@inject LogicService Logic
+@inject NavigationManager Nav
+@inject IConfiguration Config
+@implements IDisposable
+
+<PageTitle>Inventari — Admin WMS</PageTitle>
+
+@if (!_authorized)
+{
+    <MudAlert Severity="Severity.Error">Accesso non autorizzato.</MudAlert>
+    return;
+}
+
+<MudText Typo="Typo.h5" Class="mb-4" Style="font-weight:700;">Sessioni Inventario</MudText>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" Color="Color.Primary" />
+}
+else
+{
+    <MudTable Items="_sessions" Dense="true" Hover="true" Striped="true"
+              Filter="FilterFunc" @bind-SelectedItem="_selected">
+        <ToolBarContent>
+            <MudTextField @bind-Value="_search" Placeholder="Cerca operatore, magazzino…"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search"
+                          Immediate="true" Class="mt-0" />
+        </ToolBarContent>
+        <HeaderContent>
+            <MudTh>Operatore</MudTh>
+            <MudTh>Magazzino</MudTh>
+            <MudTh>Zona</MudTh>
+            <MudTh>Inizio</MudTh>
+            <MudTh>Fine</MudTh>
+            <MudTh>Articoli</MudTh>
+            <MudTh>Qtà tot.</MudTh>
+            <MudTh>Stato</MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd>@context.OperatorCode</MudTd>
+            <MudTd>@context.WarehouseCode @context.WarehouseDesc</MudTd>
+            <MudTd>@context.Zone</MudTd>
+            <MudTd>@context.StartedAt.ToString("dd/MM/yy HH:mm")</MudTd>
+            <MudTd>@(context.ClosedAt?.ToString("dd/MM/yy HH:mm") ?? "—")</MudTd>
+            <MudTd>@context.TotalItems (@context.AppliedItems app.)</MudTd>
+            <MudTd>@(context.TotalQty?.ToString("N2") ?? "—")</MudTd>
+            <MudTd>
+                @if (context.IsClosed)
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Success">Chiuso</MudChip>
+                }
+                else
+                {
+                    <MudChip T="string" Size="Size.Small" Color="Color.Warning">Aperto</MudChip>
+                }
+            </MudTd>
+        </RowTemplate>
+        <PagerContent>
+            <MudTablePager PageSizeOptions="new int[]{25,50,100}" />
+        </PagerContent>
+    </MudTable>
+}
+
+@code {
+    private List<AdminInvSessionRow> _sessions = [];
+    private AdminInvSessionRow? _selected;
+    private string _search = "";
+    private bool _loading = true;
+    private bool _authorized;
+    private bool _dataLoaded;
+
+    protected override void OnInitialized()
+    {
+        Session.OnChange += OnSessionChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await CheckAndLoadAsync();
+    }
+
+    private async void OnSessionChanged()
+    {
+        await CheckAndLoadAsync();
+    }
+
+    private async Task CheckAndLoadAsync()
+    {
+        if (_dataLoaded) return;
+        var allowed = Config.GetSection("Admin:AllowedGroups").Get<string[]>() ?? [];
+        _authorized = allowed.Contains(Session.GroupCode, StringComparer.OrdinalIgnoreCase);
+        if (!_authorized) { await InvokeAsync(StateHasChanged); return; }
+
+        _sessions = await Logic.GetAdminInventorySessionsAsync();
+        _loading = false;
+        _dataLoaded = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private bool FilterFunc(AdminInvSessionRow r) =>
+        string.IsNullOrEmpty(_search) ||
+        r.OperatorCode.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+        r.WarehouseCode.Contains(_search, StringComparison.OrdinalIgnoreCase) ||
+        r.Zone.Contains(_search, StringComparison.OrdinalIgnoreCase);
+
+    public void Dispose() => Session.OnChange -= OnSessionChanged;
+}

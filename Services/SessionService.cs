@@ -4,10 +4,11 @@ namespace WMS.Services;
 
 public class SessionService
 {
-    public string? OperatorCode { get; private set; }
-    public string? OperatorName { get; private set; }
-    public string? OperatorRole { get; private set; }
-    public bool IsLoggedIn => OperatorCode is not null;
+    public string? OperatorCode  { get; private set; }
+    public string? OperatorName  { get; private set; }
+    public string? OperatorRole  { get; private set; }
+    public string? GroupCode     { get; private set; }
+    public bool IsLoggedIn   => OperatorCode is not null;
     public bool IsSupervisor => OperatorRole is "SUP" or "ADM";
 
     /// <summary>
@@ -32,11 +33,12 @@ public class SessionService
 
     public event Action? OnChange;
 
-    public void Login(string code, string name, string role)
+    public void Login(string code, string name, string role, string groupCode)
     {
         OperatorCode = code;
         OperatorName = name;
         OperatorRole = role;
+        GroupCode    = groupCode;
         Cart.Clear();
         NotifyStateChanged();
     }
@@ -46,6 +48,7 @@ public class SessionService
         OperatorCode = null;
         OperatorName = null;
         OperatorRole = null;
+        GroupCode    = null;
         Cart.Clear();
         NotifyStateChanged();
     }

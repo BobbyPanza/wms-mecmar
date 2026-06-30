@@ -56,6 +56,10 @@
                     <MudMenuItem OnClick="Logout">
                         <MudIcon Icon="@Icons.Material.Filled.Logout" Size="Size.Small" Class="mr-2" />Logout
                     </MudMenuItem>
+                    <MudDivider />
+                    <MudMenuItem Disabled="true">
+                        <MudText Typo="Typo.caption" Class="text-disabled">v@(_appVersion)</MudText>
+                    </MudMenuItem>
                 </ChildContent>
             </MudMenu>
         }
@@ -70,6 +74,9 @@
 
 @code {
     [Inject] private ILogger<MainLayout> _log { get; set; } = default!;
+
+    private static readonly string _appVersion =
+        typeof(MainLayout).Assembly.GetName().Version?.ToString(3) ?? "?";
 
     private static readonly MudTheme _theme = new()
     {
@@ -160,7 +167,10 @@
             var name = await JS.InvokeAsync<string?>("localStorage.getItem", "wms-op-name");
             var role = await JS.InvokeAsync<string?>("localStorage.getItem", "wms-op-role");
             if (!string.IsNullOrEmpty(code) && !string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(role))
-                Session.Login(code, name, role);
+            {
+                var groupCode = await JS.InvokeAsync<string?>("localStorage.getItem", "wms-op-group") ?? "";
+                Session.Login(code, name, role, groupCode);
+            }
         }
         catch (Exception ex)
         {

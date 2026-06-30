@@ -1,4 +1,4 @@
-@inject MockWmsService Wms
+@inject ErpService Erp
 
 <MudDialog>
     <TitleContent>
@@ -9,53 +9,105 @@
     </TitleContent>
     <DialogContent>
 
-        @* ─── Immagine placeholder ─────────────────────────────────────── *@
-        <div class="@(_imgExpanded ? "wms-article-image-expanded" : "wms-article-image")"
-             style="cursor:pointer;margin-bottom:12px;background:#1e2a40;border-radius:10px;display:flex;align-items:center;justify-content:center;"
-             @onclick="() => _imgExpanded = !_imgExpanded">
-            <MudIcon Icon="@Icons.Material.Filled.Inventory2"
-                     Style="@(_imgExpanded ? "font-size:160px;color:#5B9BD5;" : "font-size:80px;color:#5B9BD5;")"
-                     title="@(_imgExpanded ? "Riduci" : "Espandi")" />
-            @if (!_imgExpanded)
-            {
-                <MudText Typo="Typo.caption" Style="color:#64748B;margin-left:8px;">
-                    tocca per espandere
-                </MudText>
-            }
-        </div>
+        @* ─── Miniatura articolo ───────────────────────────────────────────── *@
+        <img src="/api/thumbnail/@ArticleCode"
+             style="width:100%;max-height:180px;object-fit:contain;border-radius:8px;margin-bottom:12px;background:#111;cursor:pointer;"
+             onerror="this.style.display='none'"
+             @onclick="() => _lightbox = true"
+             alt="@ArticleCode" />
 
-        @* ─── Caratteristiche ──────────────────────────────────────────── *@
-        @if (_chars.Count > 0)
+        @* ─── Documenti tecnici ────────────────────────────────────────────── *@
+        @if (_docs.Count > 0)
+        {
+            <div class="mb-3">
+                @foreach (var doc in _docs)
+                {
+                    <div class="mb-2">
+                        @if (_expandedUrl == doc.Url)
+                        {
+                            <div style="position:relative;">
+                                <iframe src="@doc.Url" style="width:100%;height:480px;border:none;border-radius:8px;" title="@doc.Nome"></iframe>
+                                <MudIconButton Icon="@Icons.Material.Filled.ExpandLess"
+                                               Size="Size.Small"
+                                               Style="position:absolute;top:4px;right:4px;background:#1e2a40cc;"
+                                               OnClick="() => _expandedUrl = null"
+                                               title="Riduci" />
+                            </div>
+                        }
+                        else
+                        {
+                            <div style="background:#1e2a40;border-radius:8px;padding:10px 12px;display:flex;align-items:center;justify-content:space-between;">
+                                <div class="d-flex align-center gap-2">
+                                    <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Color="Color.Error" Size="Size.Small" />
+                                    <MudText Typo="Typo.body2">@doc.Nome</MudText>
+                                </div>
+                                <div class="d-flex align-center gap-1">
+                                    <MudIconButton Icon="@Icons.Material.Filled.Visibility"
+                                                   Size="Size.Small" Color="Color.Default"
+                                                   OnClick="() => _expandedUrl = doc.Url"
+                                                   title="Anteprima" />
+                                    <MudIconButton Icon="@Icons.Material.Filled.OpenInNew"
+                                                   Size="Size.Small" Color="Color.Info"
+                                                   Href="@doc.Url" Target="_blank"
+                                                   title="Apri" />
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        @* ─── Caratteristiche ──────────────────────────────────────────────── *@
+        @if (_info is not null)
         {
             <MudText Typo="Typo.subtitle2" Style="color:#93C0DC;margin-bottom:6px;">
                 Caratteristiche
             </MudText>
-            <MudSimpleTable Dense="true" Hover="false" Style="margin-bottom:12px;">
+            <MudSimpleTable Dense="true" Hover="false">
                 <tbody>
-                    @foreach (var kv in _chars)
+                    <tr>
+                        <td style="color:#94A3B8;font-size:0.8rem;width:40%;">Codice</td>
+                        <td style="font-weight:600;font-size:0.85rem;font-family:monospace;">@_info.Code</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#94A3B8;font-size:0.8rem;">Descrizione</td>
+                        <td style="font-weight:600;font-size:0.85rem;">@_info.Description</td>
+                    </tr>
+                    <tr>
+                        <td style="color:#94A3B8;font-size:0.8rem;">U.M.</td>
+                        <td style="font-weight:600;font-size:0.85rem;">@_info.UoM</td>
+                    </tr>
+                    @if (!string.IsNullOrEmpty(_info.FamilyCode))
                     {
                         <tr>
-                            <td style="color:#94A3B8;font-size:0.8rem;width:40%;">@kv.Key</td>
-                            <td style="font-weight:600;font-size:0.85rem;">@kv.Value</td>
+                            <td style="color:#94A3B8;font-size:0.8rem;">Famiglia</td>
+                            <td style="font-weight:600;font-size:0.85rem;">@_info.FamilyCode</td>
+                        </tr>
+                    }
+                    @if (!string.IsNullOrEmpty(_info.Paf02))
+                    {
+                        <tr>
+                            <td style="color:#94A3B8;font-size:0.8rem;">Ubicazione</td>
+                            <td style="font-weight:600;font-size:0.85rem;">@_info.Paf02</td>
+                        </tr>
+                    }
+                    @if (!string.IsNullOrEmpty(_info.Handling))
+                    {
+                        <tr>
+                            <td style="color:#94A3B8;font-size:0.8rem;">Handling</td>
+                            <td style="font-weight:600;font-size:0.85rem;">@_info.Handling</td>
+                        </tr>
+                    }
+                    @if (!string.IsNullOrEmpty(_info.SpecsDescription))
+                    {
+                        <tr>
+                            <td style="color:#94A3B8;font-size:0.8rem;">Specifiche</td>
+                            <td style="font-weight:600;font-size:0.85rem;">@_info.SpecsDescription</td>
                         </tr>
                     }
                 </tbody>
             </MudSimpleTable>
-        }
-
-        @* ─── Allegati PDF ────────────────────────────────────────────── *@
-        @if (_pdfs.Count > 0)
-        {
-            <MudText Typo="Typo.subtitle2" Style="color:#93C0DC;margin-bottom:6px;">
-                Allegati PDF
-            </MudText>
-            @foreach (var pdf in _pdfs)
-            {
-                <div class="d-flex align-center gap-2 mb-1" style="padding:6px 0;border-bottom:1px solid #333;">
-                    <MudIcon Icon="@Icons.Material.Filled.PictureAsPdf" Color="Color.Error" Size="Size.Small" />
-                    <MudText Typo="Typo.body2" Style="word-break:break-word;">@pdf</MudText>
-                </div>
-            }
         }
 
     </DialogContent>
@@ -64,17 +116,37 @@
     </DialogActions>
 </MudDialog>
 
+@if (_lightbox)
+{
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.9);z-index:9999;display:flex;align-items:center;justify-content:center;"
+         @onclick="() => _lightbox = false">
+        <img src="/api/thumbnail/@ArticleCode"
+             style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:10px;" />
+    </div>
+}
+
 @code {
     [CascadingParameter] private IMudDialogInstance MudDialog { get; set; } = null!;
     [Parameter] public string ArticleCode { get; set; } = "";
 
-    private Dictionary<string, string> _chars = [];
-    private List<string> _pdfs = [];
-    private bool _imgExpanded;
+    private ArticleInfoDto? _info;
+    private List<ArticleDocument> _docs = [];
+    private string? _expandedUrl;
+    private bool _lightbox;
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
-        _chars = Wms.GetArticleCharacteristics(ArticleCode);
-        _pdfs = Wms.GetArticlePdfs(ArticleCode);
+        try
+        {
+            var infoTask = Erp.GetArticleInfoAsync(ArticleCode);
+            var docsTask = Erp.GetArticleDocumentsAsync(ArticleCode);
+            _info = await infoTask;
+            _docs = await docsTask;
+        }
+        catch
+        {
+            _info = null;
+            _docs = [];
+        }
     }
 }

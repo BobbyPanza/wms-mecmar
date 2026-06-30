@@ -110,13 +110,13 @@
         if (string.IsNullOrEmpty(_selectedCode) || string.IsNullOrEmpty(_pin)) return;
         _loading = true;
 
-        bool ok; string? name, role;
+        bool ok; string? name, role, groupCode;
 
         if (Erp.IsConfigured)
         {
             try
             {
-                (ok, name, role) = await Erp.TryLoginAsync(_selectedCode, _pin);
+                (ok, name, role, groupCode) = await Erp.TryLoginAsync(_selectedCode, _pin);
             }
             catch
             {
@@ -129,14 +129,16 @@
         {
             await Task.Delay(300); // simula latenza mock
             (ok, name, role) = Wms.TryLogin(_selectedCode, _pin);
+            groupCode = role;
         }
 
         if (ok)
         {
-            Session.Login(_selectedCode, name!, role!);
-            await JS.InvokeVoidAsync("localStorage.setItem", "wms-op-code", _selectedCode);
-            await JS.InvokeVoidAsync("localStorage.setItem", "wms-op-name", name!);
-            await JS.InvokeVoidAsync("localStorage.setItem", "wms-op-role", role!);
+            Session.Login(_selectedCode, name!, role!, groupCode ?? "");
+            await JS.InvokeVoidAsync("localStorage.setItem", "wms-op-code",  _selectedCode);
+            await JS.InvokeVoidAsync("localStorage.setItem", "wms-op-name",  name!);
+            await JS.InvokeVoidAsync("localStorage.setItem", "wms-op-role",  role!);
+            await JS.InvokeVoidAsync("localStorage.setItem", "wms-op-group", groupCode ?? "");
             if (Session.NodeReady)
                 _ = Erp.UpdateNodeLoginAsync(Session.NodeId, _selectedCode);
             Nav.NavigateTo("/home");

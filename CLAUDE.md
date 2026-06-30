@@ -116,7 +116,8 @@ Vedi [docs/IntesiPrinterManager.md](docs/IntesiPrinterManager.md).
 - Flusso: leggi `WMS_PrintTemplate` per contesto → auto-fill parametri → form parametri manuali → chiama Printer Manager
 - Routing automatico in `PrintService`: PM se `IntesiPrinterManagerUrl` valorizzato e report non è `.rpt`; altrimenti legacy Crystal (`BaseUrl`)
 - Bottone stampa in AppBar — visibile solo se pagina ha contesto attivo (`Session.PrintContext ≠ ""`)
-- Contesti attivi: ARTICLE, LOCATION, MOVE, CART, INVENTORY, ACCEPTANCE, ADJUSTMENT
+- Contesti attivi: ARTICLE, LOCATION, MOVE, CART, INVENTORY, ACCEPTANCE, ADJUSTMENT, PICK
+- AutoFill PICK: `LISTCODE` (codice lista), `LISTID` (GUID lista)
 - Config: sezione `PrintService` in appsettings (IntesiPrinterManagerUrl, IntesiPrinterManagerPrinter, PrinterManagerEndpointPath, BaseUrl)
 - Tabelle Logic: `WMS_PrintTemplate` (Id, Context, Name, ReportName, PrinterName, IsActive) + `WMS_PrintTemplateParam` (TemplateId, ParamName, AutoFillKey, Label, IsRequired, SortOrder)
 - `AutoFillKey` nei parametri: chiave del dizionario `Session.PrintAutoFill` compilato dalla pagina (es. "PACOD", "LCCOD")

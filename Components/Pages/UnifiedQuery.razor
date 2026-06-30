@@ -35,8 +35,14 @@ else if (_notFound)
     <MudPaper Elevation="3" Class="pa-3" Style="border-radius:12px;">
         <div class="d-flex gap-3 align-start">
             <div class="wms-article-image">
-                <MudIcon Icon="@Icons.Material.Filled.Inventory2" Style="font-size:52px;color:#5B9BD5;" />
-                <MudText Typo="Typo.caption" Style="color:#64748B;margin-top:4px;font-size:0.65rem;">img. articolo</MudText>
+                <img src="/api/thumbnail/@_article.Code"
+                     style="width:72px;height:72px;object-fit:contain;border-radius:6px;cursor:pointer;"
+                     onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"
+                     @onclick="() => _lightbox = true"
+                     alt="@_article.Code" />
+                <div style="display:none;flex-direction:column;align-items:center;">
+                    <MudIcon Icon="@Icons.Material.Filled.Inventory2" Style="font-size:52px;color:#5B9BD5;" />
+                </div>
             </div>
             <div class="flex-grow-1" style="min-width:0;">
                 <div class="d-flex align-center gap-1 mb-1">
@@ -49,10 +55,33 @@ else if (_notFound)
                     @_article.Description
                 </MudText>
                 <MudText Typo="Typo.caption" Style="color:#94A3B8;">UM: @_article.UoM</MudText>
-                <div class="d-flex align-center mt-2 gap-2">
-                    <MudText Typo="Typo.caption" Style="color:#94A3B8;">Giacenza totale:</MudText>
+                <div class="d-flex align-center mt-2 gap-2 flex-wrap">
+                    <MudText Typo="Typo.caption" Style="color:#94A3B8;">Giacenza:</MudText>
                     <StockBadge Quantity="@_article.TotalStock" MinStock="@_article.MinStock"
                                 UoM="@_article.UoM" Size="Size.Medium" />
+                </div>
+                <div class="d-flex flex-wrap gap-2 mt-1">
+                    @if (_article.MinStockPdr > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Default"
+                                 Icon="@Icons.Material.Filled.WarningAmber">
+                            Scorta @_article.MinStockPdr.ToString("0.###") @_article.UoM
+                        </MudChip>
+                    }
+                    @if (_article.Engaged > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Warning"
+                                 Icon="@Icons.Material.Filled.Build">
+                            Imp. @_article.Engaged.ToString("0.###") @_article.UoM
+                        </MudChip>
+                    }
+                    @if (_article.Ordered > 0)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Info"
+                                 Icon="@Icons.Material.Filled.ShoppingCart">
+                            Ord. @_article.Ordered.ToString("0.###") @_article.UoM
+                        </MudChip>
+                    }
                 </div>
             </div>
         </div>
@@ -105,10 +134,76 @@ else if (_notFound)
                             </MudText>
                         </div>
                         <MudText Style="@($"font-weight:700;font-size:1.1rem;color:{(mov.Quantity >= 0 ? "#4FAB5B" : "#E05252")}")">
-                            @(mov.Quantity >= 0 ? "+" : "")@mov.Quantity.ToString("N0")
+                            @(mov.Quantity >= 0 ? "+" : "")@mov.Quantity.ToString("0.###")
                         </MudText>
                     </div>
                 </MudPaper>
+            }
+        </MudTabPanel>
+
+        @* ─── Tab Ordini ─────────────────────────────────────────────── *@
+        <MudTabPanel Icon="@Icons.Material.Filled.ShoppingCart"
+                     Text="@($"Ordini{(_article.Orders?.Count > 0 ? $" ({_article.Orders.Count})" : "")}")">
+            @if (_article.Orders is null or { Count: 0 })
+            {
+                <MudText Class="pa-3" Style="color:#64748B;">Nessun ordine in corso.</MudText>
+            }
+            else
+            {
+                @foreach (var o in _article.Orders)
+                {
+                    <MudPaper Elevation="1" Class="pa-2 mb-1" Style="border-radius:6px;background:#1c2333;">
+                        <div class="d-flex justify-space-between align-center">
+                            <div>
+                                <MudText Style="font-weight:700;font-family:monospace;font-size:.9rem;">@o.OrderCode</MudText>
+                                <MudText Typo="Typo.caption" Style="color:#94A3B8;">@o.Description</MudText>
+                            </div>
+                            <div class="d-flex flex-column align-end">
+                                <MudText Style="font-weight:700;color:#23A6F0;">@o.Qty.ToString("0.###") @_article.UoM</MudText>
+                                @if (o.DueDate.HasValue)
+                                {
+                                    <MudText Typo="Typo.caption" Style="color:#64748B;">@o.DueDate.Value.ToString("dd/MM/yy")</MudText>
+                                }
+                            </div>
+                        </div>
+                    </MudPaper>
+                }
+                <MudText Typo="Typo.caption" Class="mt-1 px-1" Style="color:#64748B;">
+                    Totale: @_article.Orders.Sum(o => o.Qty).ToString("0.###") @_article.UoM
+                </MudText>
+            }
+        </MudTabPanel>
+
+        @* ─── Tab Impegni ────────────────────────────────────────────── *@
+        <MudTabPanel Icon="@Icons.Material.Filled.Build"
+                     Text="@($"Impegni{(_article.Engagements?.Count > 0 ? $" ({_article.Engagements.Count})" : "")}")">
+            @if (_article.Engagements is null or { Count: 0 })
+            {
+                <MudText Class="pa-3" Style="color:#64748B;">Nessun impegno in corso.</MudText>
+            }
+            else
+            {
+                @foreach (var e in _article.Engagements)
+                {
+                    <MudPaper Elevation="1" Class="pa-2 mb-1" Style="border-radius:6px;background:#1c2333;">
+                        <div class="d-flex justify-space-between align-center">
+                            <div>
+                                <MudText Style="font-weight:700;font-family:monospace;font-size:.9rem;">@e.OrderCode</MudText>
+                                <MudText Typo="Typo.caption" Style="color:#94A3B8;">@e.Description</MudText>
+                            </div>
+                            <div class="d-flex flex-column align-end">
+                                <MudText Style="font-weight:700;color:#FF8C00;">@e.Qty.ToString("0.###") @_article.UoM</MudText>
+                                @if (e.DueDate.HasValue)
+                                {
+                                    <MudText Typo="Typo.caption" Style="color:#64748B;">@e.DueDate.Value.ToString("dd/MM/yy")</MudText>
+                                }
+                            </div>
+                        </div>
+                    </MudPaper>
+                }
+                <MudText Typo="Typo.caption" Class="mt-1 px-1" Style="color:#64748B;">
+                    Totale: @_article.Engagements.Sum(e => e.Qty).ToString("0.###") @_article.UoM
+                </MudText>
             }
         </MudTabPanel>
     </MudTabs>
@@ -172,7 +267,7 @@ else if (_notFound)
                             </MudText>
                         </div>
                         <MudText Style="@($"font-weight:700;font-size:1.1rem;color:{(mov.Quantity >= 0 ? "#4FAB5B" : "#E05252")}")">
-                            @(mov.Quantity >= 0 ? "+" : "")@mov.Quantity.ToString("N0")
+                            @(mov.Quantity >= 0 ? "+" : "")@mov.Quantity.ToString("0.###")
                         </MudText>
                     </div>
                 </MudPaper>
@@ -188,10 +283,20 @@ else if (_notFound)
     </MudText>
 }
 
+@if (_lightbox)
+{
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;"
+         @onclick="() => _lightbox = false">
+        <img src="/api/thumbnail/@_article!.Code"
+             style="max-width:90vw;max-height:90vh;object-fit:contain;border-radius:10px;" />
+    </div>
+}
+
 @code {
     private ArticleDto? _article;
     private LocationDto? _location;
     private bool _loading;
+    private bool _lightbox;
     private bool _notFound;
     private string _lastQuery = "";
 

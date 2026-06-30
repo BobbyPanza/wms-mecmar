@@ -90,7 +90,8 @@ BEGIN
             @sLCCOD       = @LCCOD,
             @iIDRIF       = @IDSPP,
             @iIDTBR       = 5,
-            @operatorCode = @OPCOD;
+            @operatorCode = @OPCOD,
+            @sOLCOD       = @OLCOD;
 
         IF ISNULL(@RetVal, -1) <= 0
         BEGIN

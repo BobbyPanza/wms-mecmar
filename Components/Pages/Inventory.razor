@@ -6,6 +6,7 @@
 @inject ErpService Erp
 @inject LogicService Logic
 @inject ISnackbar Snackbar
+@inject IJSRuntime JS
 
 <PageTitle>Inventario</PageTitle>
 
@@ -102,12 +103,12 @@ else if (_locationPicker is not null)
                 <div class="d-flex flex-column align-end">
                     @if (row.IsCounted)
                     {
-                        <MudText Style="font-weight:700;color:#4FAB5B;">@row.CountedQty @row.UoM ✓</MudText>
-                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">att: @row.ExpectedQty</MudText>
+                        <MudText Style="font-weight:700;color:#4FAB5B;">@QtyFmt(row.CountedQty ?? 0) @row.UoM ✓</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">att: @QtyFmt(row.ExpectedQty)</MudText>
                     }
                     else
                     {
-                        <MudText Style="color:#94A3B8;">@row.ExpectedQty @row.UoM</MudText>
+                        <MudText Style="color:#94A3B8;">@QtyFmt(row.ExpectedQty) @row.UoM</MudText>
                         <MudChip T="string" Size="Size.Small" Color="Color.Warning">DA CONTARE</MudChip>
                     }
                 </div>
@@ -193,12 +194,12 @@ else if (_activeCount is null && _extraCode is null)
                 <div class="d-flex flex-column align-end ml-2" style="white-space:nowrap;">
                     @if (count.IsCounted)
                     {
-                        <MudText Style="font-weight:700;color:#4FAB5B;">@count.CountedQty @count.UoM ✓</MudText>
-                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">att: @count.ExpectedQty</MudText>
+                        <MudText Style="font-weight:700;color:#4FAB5B;">@QtyFmt(count.CountedQty ?? 0) @count.UoM ✓</MudText>
+                        <MudText Typo="Typo.caption" Style="color:#94A3B8;">att: @QtyFmt(count.ExpectedQty)</MudText>
                     }
                     else
                     {
-                        <MudText Style="color:#94A3B8;">@count.ExpectedQty @count.UoM</MudText>
+                        <MudText Style="color:#94A3B8;">@QtyFmt(count.ExpectedQty) @count.UoM</MudText>
                         <MudChip T="string" Size="Size.Small" Color="Color.Warning">DA CONTARE</MudChip>
                     }
                 </div>
@@ -260,7 +261,7 @@ else if (_extraCode is not null)
         <MudChip T="string" Color="Color.Info" Class="mb-2">@_extraLocation</MudChip>
 
         <MudNumericField @bind-Value="_extraQty" Label="Quantità"
-                         Variant="Variant.Outlined" Min="0m" Step="0.001m" Culture="@CultureInfo.CurrentCulture" Class="mb-3" />
+                         Variant="Variant.Outlined" Min="0m" Step="1m" Format="0" Culture="@CultureInfo.CurrentCulture" Class="mb-3" />
 
         <MudButton Variant="Variant.Filled" Color="Color.Warning" FullWidth="true"
                    Size="Size.Large" StartIcon="@Icons.Material.Filled.AddCircle"
@@ -291,7 +292,7 @@ else if (_activeCount is not null)
     </MudPaper>
 
     <MudNumericField @bind-Value="_countedQty" Label="Quantità contata"
-                     Variant="Variant.Outlined" Min="0m" Step="0.001m" Culture="@CultureInfo.CurrentCulture"
+                     Variant="Variant.Outlined" Min="0m" Step="1m" Format="0" Culture="@CultureInfo.CurrentCulture"
                      Class="mb-3" AutoFocus="true" />
 
     @if (_countedQty >= 0 && _countedQty - _activeCount.ExpectedQty != 0)
@@ -309,6 +310,20 @@ else if (_activeCount is not null)
     </MudButton>
 }
 
+@if (_session is not null)
+{
+    <div style="position:fixed;right:10px;bottom:80px;z-index:300;display:flex;flex-direction:column;gap:6px;">
+        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp"
+                       Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
+                       Style="border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.6);"
+                       OnClick="ScrollTop" Title="Vai in cima" />
+        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown"
+                       Variant="Variant.Filled" Color="Color.Warning" Size="Size.Small"
+                       Style="border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.6);"
+                       OnClick="ScrollBottom" Title="Vai in fondo" />
+    </div>
+}
+
 @code {
     private InventorySession?  _session;
     private InventorySession?  _openSession;
@@ -316,6 +331,9 @@ else if (_activeCount is not null)
     private decimal            _countedQty;
 
     private static string QtyFmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    private Task ScrollTop()    => JS.InvokeVoidAsync("eval", "var e=document.querySelector('.mud-main-content');if(e)e.scrollTo({top:0,behavior:'smooth'})").AsTask();
+    private Task ScrollBottom() => JS.InvokeVoidAsync("eval", "var e=document.querySelector('.mud-main-content');if(e)e.scrollTo({top:e.scrollHeight,behavior:'smooth'})").AsTask();
     private string             _selWarehouse = "";
     private string             _selZone      = "";
     private List<WarehouseDto> _warehouses   = [];

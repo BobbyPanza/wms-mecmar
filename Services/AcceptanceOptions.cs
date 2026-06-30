@@ -14,6 +14,9 @@ public class AcceptanceOptions
     /// </summary>
     public string LocationFlagColumn { get; set; } = "LCACC";
 
+    /// <summary>Causale TRD_InsertMov per lo scarico dal magazzino documento (L_DRCR).</summary>
+    public string DischargeCausal { get; set; } = "SMI";
+
     /// <summary>Causale TRD_InsertMov per il carico merce in accettazione.</summary>
     public string LoadCausal { get; set; } = "CMI";
 

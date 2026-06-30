@@ -22,8 +22,48 @@ public class PickListService
 
     // ─── Liste ───────────────────────────────────────────────────────────────
 
-    public Task<List<PickListHeaderDto>> GetPickListsAsync()
-        => _logic.GetPickListsAsync();
+    public Task<List<PickListHeaderDto>> GetPickListsAsync(string opCode, bool onlyAssigned = false)
+        => _logic.GetPickListsAsync(opCode, onlyAssigned);
+
+    /// <summary>Preview articoli di una bolla senza creare la lista.</summary>
+    public Task<List<PickListRowDto>> GetPreviewRowsAsync(string olCod)
+        => _erp.GetPickListRowsForOlCodAsync(olCod);
+
+    /// <summary>Crea lista da righe già selezionate (anziché dall'intera bolla).</summary>
+    public async Task<Guid> CreateListFromRowsAsync(
+        string code, string description, string opCode, List<PickListRowDto> rows)
+    {
+        if (rows.Count == 0)
+            throw new InvalidOperationException("Nessuna riga selezionata.");
+        var listId = await _logic.CreatePickListAsync(code, description, opCode);
+        for (int i = 0; i < rows.Count; i++)
+        {
+            rows[i].Id        = Guid.NewGuid();
+            rows[i].ListId    = listId;
+            rows[i].SortOrder = i;
+            await _logic.AddPickListRowAsync(listId, rows[i]);
+        }
+        return listId;
+    }
+
+    /// <summary>Aggiunge le righe di una bolla a una lista già esistente.</summary>
+    public async Task AddBollaToListAsync(Guid listId, string olCod)
+    {
+        var rows = await _erp.GetPickListRowsForOlCodAsync(olCod);
+        if (rows.Count == 0)
+            throw new InvalidOperationException($"Bolla {olCod} non trovata o senza righe da prelevare.");
+
+        var existing  = await _logic.GetPickListRowsAsync(listId);
+        var sortBase  = existing.Count > 0 ? existing.Max(r => r.SortOrder) + 1 : 0;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            rows[i].Id        = Guid.NewGuid();
+            rows[i].ListId    = listId;
+            rows[i].SortOrder = sortBase + i;
+            await _logic.AddPickListRowAsync(listId, rows[i]);
+        }
+        await _logic.UpdatePickListStatusAsync(listId);
+    }
 
     /// <summary>
     /// Crea una nuova lista caricando le righe dalla vista WMS_V_PickList per la bolla indicata.
@@ -108,6 +148,51 @@ public class PickListService
     public Task ClosePickListAsync(Guid listId)
         => _logic.ClosePickListAsync(listId);
 
+    /// <summary>
+    /// Ritorna le info di versamento per tutte le bolle presenti nella lista.
+    /// Solo le bolle con A_LAV.FAABV='Y' e LAUFC='Y' compaiono nel risultato.
+    /// </summary>
+    public Task<List<PickListVersamentoInfoDto>> GetVersamentoInfoAsync(IEnumerable<string> olCods)
+        => _erp.GetVersamentoInfoForOlCodsAsync(olCods);
+
+    /// <summary>
+    /// Esegue il versamento per tutte le bolle della lista che hanno una fase abilitata.
+    /// Per ogni bolla: apre S_SES, chiama WMS_InsertVersamentoLine (S_PAV + S_SPV + TRD_InsertMov CAR),
+    /// chiude S_SES. Se versamento completo la SP chiude anche A_LAV e S_ODL.
+    /// </summary>
+    public async Task<(int Ok, List<string> Errors)> ExecuteVersamentoAsync(
+        IEnumerable<PickListVersamentoInfoDto> items, string opCode, int nodeId)
+    {
+        int ok = 0;
+        var errors = new List<string>();
+
+        foreach (var item in items)
+        {
+            var (idSes, sesErr) = await _erp.OpenPickSessionAsync(item.BollaVersamento, opCode, nodeId);
+            if (idSes <= 0)
+            {
+                errors.Add($"{item.ArticleCode} ({item.BollaVersamento}): apertura sessione fallita — {sesErr}");
+                continue;
+            }
+            try
+            {
+                var (idMov, movErr) = await _erp.InsertVersamentoLineAsync(
+                    item.BollaVersamento, item.ArticleCode, item.ArticleDesc,
+                    item.UoM, item.Qty, opCode, nodeId, idSes);
+
+                if (idMov <= 0)
+                    errors.Add($"{item.ArticleCode}: {movErr}");
+                else
+                    ok++;
+            }
+            finally
+            {
+                await _erp.ClosePickSessionAsync(idSes);
+            }
+        }
+        return (ok, errors);
+    }
+
     public Task DeclareMissingAsync(Guid rowId)
         => _logic.SetRowMissingAsync(rowId, true);
 
@@ -120,7 +205,8 @@ public class PickListService
     /// </summary>
     public async Task StageAllFromMainAsync(Guid listId, string opCode)
     {
-        var rows = await _logic.GetPickListRowsAsync(listId);
+        // GetPickListDetailAsync arricchisce le righe con MainLocationCode/MainWarehouseCode da ERP
+        var rows = await GetPickListDetailAsync(listId);
         foreach (var row in rows)
         {
             if (row.IsMissing || row.RemainingQty <= 0) continue;
@@ -209,10 +295,13 @@ public class PickListService
 
                         if (idSes > 0)
                         {
+                            var loc = pick.LocationCode ?? "";
+                            var mg  = !string.IsNullOrEmpty(pick.WarehouseCode)
+                                          ? pick.WarehouseCode
+                                          : WmsWarehouse.FromLocation(loc);
                             var (lineOk, mov, lineErr) = await _erp.InsertPickLineAsync(
                                 olCod, articleCode, articleDesc, uom,
-                                pick.PickedQty, opCode, nodeId, idSes,
-                                pick.WarehouseCode ?? "", pick.LocationCode ?? "");
+                                pick.PickedQty, opCode, nodeId, idSes, mg, loc);
 
                             if (!lineOk)
                             {
@@ -223,12 +312,16 @@ public class PickListService
                         }
                         else
                         {
+                            var loc2 = pick.LocationCode ?? "";
+                            var mg2  = !string.IsNullOrEmpty(pick.WarehouseCode)
+                                           ? pick.WarehouseCode
+                                           : WmsWarehouse.FromLocation(loc2);
                             movId = await _erp.InsertMovAsync(new ErpMovRequest(
                                 ArticleCode:   articleCode,
                                 CausalCode:    "SCAR",
                                 Qty:           pick.PickedQty,
-                                WarehouseCode: pick.WarehouseCode,
-                                LocationCode:  pick.LocationCode,
+                                WarehouseCode: mg2,
+                                LocationCode:  loc2,
                                 OperatorCode:  opCode,
                                 NodeId:        nodeId
                             ));

@@ -6,13 +6,20 @@
 @inject ISnackbar Snackbar
 @inject IDialogService Dialog
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <PageTitle>Prelievo da Lista</PageTitle>
 
 @if (_list is null)
 {
     @* ─── Selezione lista ──────────────────────────────────────────────────── *@
-    <MudText Typo="Typo.h6" Class="mb-3">Prelievo da Lista</MudText>
+    <div class="d-flex align-center justify-space-between mb-2">
+        <MudText Typo="Typo.h6">Prelievo da Lista</MudText>
+        <MudSwitch Value="_onlyAssigned"
+                   Color="Color.Primary" Size="Size.Small"
+                   Label="Solo assegnate a me"
+                   ValueChanged="@(async (bool v) => { _onlyAssigned = v; await LoadListsAsync(); })" />
+    </div>
     <BarcodeInput Label="Scan bolla / codice lista" OnCodeScanned="OnListBarcode" AutoFocus="true" />
 
     @if (_loading)
@@ -88,15 +95,14 @@ else
     @* Toolbar: sort + switch *@
     <MudPaper Class="pa-2 mb-2" Style="border-radius:8px;background:#242e42;">
         <div class="d-flex align-center gap-2 flex-wrap">
-            <MudSelect T="PickSortField" @bind-Value="_sortField"
+            <MudSelect T="PickSortField" Value="_sortField"
+                       ValueChanged="@((PickSortField v) => { _sortField = v; StateHasChanged(); })"
                        Label="Ordina" Dense="true" Variant="Variant.Outlined"
                        Style="min-width:160px;max-width:200px;">
-                <MudSelectItem Value="PickSortField.ArticleCode">Codice articolo</MudSelectItem>
                 <MudSelectItem Value="PickSortField.Handling">Tipo handling</MudSelectItem>
-                <MudSelectItem Value="PickSortField.IdSpec">IDSpec</MudSelectItem>
-                <MudSelectItem Value="PickSortField.IdGroup">IDGroup</MudSelectItem>
                 <MudSelectItem Value="PickSortField.Paf02">Ubicazione (PAF02)</MudSelectItem>
                 <MudSelectItem Value="PickSortField.MainLocation">Loc. preferenziale</MudSelectItem>
+                <MudSelectItem Value="PickSortField.ArticleCode">Codice articolo</MudSelectItem>
             </MudSelect>
             <MudSpacer />
             <MudSwitch @bind-Value="_hideCompleted" Color="Color.Primary" Size="Size.Small"
@@ -213,6 +219,18 @@ else
             { <span>Fai prelievi</span> }
         </MudButton>
     </div>
+
+    @* Scroll rapido — visibile solo con lista aperta *@
+    <div style="position:fixed;right:10px;bottom:80px;z-index:300;display:flex;flex-direction:column;gap:6px;">
+        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp"
+                       Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       Style="border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.6);"
+                       OnClick="ScrollTop" Title="Vai in cima" />
+        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown"
+                       Variant="Variant.Filled" Color="Color.Primary" Size="Size.Small"
+                       Style="border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,.6);"
+                       OnClick="ScrollBottom" Title="Vai in fondo" />
+    </div>
 }
 
 @code {
@@ -222,7 +240,8 @@ else
     private PickListHeaderDto?      _list;
     private List<PickListRowDto>    _rows   = [];
     private PickSortField           _sortField = PickSortField.Handling;
-    private bool _hideCompleted = true;
+    private bool _hideCompleted  = true;
+    private bool _onlyAssigned   = true;
     private bool _loading;
     private bool _executing;
 
@@ -272,7 +291,7 @@ else
     private async Task LoadListsAsync()
     {
         _loading = true;
-        try   { _lists = await PickSvc.GetPickListsAsync(); }
+        try   { _lists = await PickSvc.GetPickListsAsync(Session.OperatorCode!, _onlyAssigned); }
         catch { Snackbar.Add("Errore caricamento liste", Severity.Error); }
         _loading = false;
     }
@@ -310,7 +329,11 @@ else
     {
         _list = h;
         Session.SetPageTitle(h.Code);
-        Session.SetPrintContext("PICK", new() { ["LISTCODE"] = h.Code });
+        Session.SetPrintContext("PICK", new()
+        {
+            ["LISTCODE"] = h.Code,
+            ["LISTID"]   = h.Id.ToString()
+        });
         await RefreshRowsAsync();
     }
 
@@ -377,21 +400,49 @@ else
 
     private async Task ChiudiLista()
     {
-        var dlgConf = await Dialog.ShowAsync<ConfirmDialog>("Chiudi lista",
-            new DialogParameters<ConfirmDialog>
-            {
-                { x => x.Message, "Chiudere la lista? Non apparirà più tra quelle in corso." }
-            },
-            new DialogOptions { MaxWidth = MaxWidth.ExtraSmall, FullWidth = true });
-        if ((await dlgConf.Result)?.Canceled == true) return;
-
+        // Carica info versamento per le bolle della lista
+        var versItems = new List<PickListVersamentoInfoDto>();
         try
         {
+            var olCods = _list!.OlCods.Where(c => !string.IsNullOrEmpty(c)).ToList();
+            if (olCods.Count > 0)
+                versItems = await PickSvc.GetVersamentoInfoAsync(olCods);
+        }
+        catch { /* non blocca la chiusura */ }
+
+        // Default versamento: sì se tutto completato, no se parziale
+        bool allDone = _rows.Count > 0 &&
+                       _rows.All(r => r.StagingStatus is StagingStatus.Done or StagingStatus.Missing);
+
+        var param = new DialogParameters<CloseListDialog>
+        {
+            { x => x.VersamentoItems,   versItems },
+            { x => x.DefaultVersamento, versItems.Count > 0 && allDone }
+        };
+        var dlg = await Dialog.ShowAsync<CloseListDialog>("Chiudi lista", param,
+            new DialogOptions { MaxWidth = MaxWidth.Small, FullWidth = true });
+        var res = await dlg.Result;
+        if (res?.Canceled == true) return;
+
+        var selectedVers = res?.Data as List<PickListVersamentoInfoDto> ?? [];
+        _executing = true;
+        try
+        {
+            if (selectedVers.Count > 0)
+            {
+                var (ok, errors) = await PickSvc.ExecuteVersamentoAsync(
+                    selectedVers, Session.OperatorCode!, Session.NodeId);
+                foreach (var e in errors) Snackbar.Add(e, Severity.Error);
+                if (ok > 0)
+                    Snackbar.Add($"{ok} versamento/i registrat{(ok == 1 ? "o" : "i")} su ERP", Severity.Success);
+            }
+
             await PickSvc.ClosePickListAsync(_list!.Id);
             Snackbar.Add("Lista chiusa", Severity.Info);
             await CloseList();
         }
         catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
+        _executing = false;
     }
 
     // ─── Annulla staged ───────────────────────────────────────────────────────
@@ -446,7 +497,7 @@ else
 
             await RefreshRowsAsync();
             // Aggiorna anche la testata
-            var updated = await PickSvc.GetPickListsAsync();
+            var updated = await PickSvc.GetPickListsAsync(Session.OperatorCode!);
             _list = updated.FirstOrDefault(l => l.Id == _list!.Id) ?? _list;
         }
         catch (Exception ex) { Snackbar.Add(ex.Message, Severity.Error); }
@@ -480,6 +531,9 @@ else
     // ─── Helpers ─────────────────────────────────────────────────────────────
 
     private static string Fmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    private Task ScrollTop()    => JS.InvokeVoidAsync("eval", "var e=document.querySelector('.mud-main-content');if(e)e.scrollTo({top:0,behavior:'smooth'})").AsTask();
+    private Task ScrollBottom() => JS.InvokeVoidAsync("eval", "var e=document.querySelector('.mud-main-content');if(e)e.scrollTo({top:e.scrollHeight,behavior:'smooth'})").AsTask();
 
     private static (string Bg, string BorderClass) RowStyle(PickListRowDto row) =>
         row.StagingStatus switch

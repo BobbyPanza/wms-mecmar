@@ -89,4 +89,57 @@ app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
 
+app.MapGet("/api/thumbnail/{pacod}", (string pacod, IConfiguration config, HttpResponse response) =>
+{
+    // Blocca path traversal
+    if (pacod.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        return Results.BadRequest();
+
+    var basePath = config["ArticleThumbnails:UncPath"];
+    if (string.IsNullOrEmpty(basePath)) return Results.NotFound();
+
+    var filePath = Path.Combine(basePath, $"{pacod}.png");
+    if (!File.Exists(filePath)) return Results.NotFound();
+
+    response.Headers.CacheControl = "public, max-age=3600";
+    return Results.File(filePath, "image/png");
+});
+
+app.MapGet("/api/acceptance-photo/{id:guid}", async (Guid id, IConfiguration config, LogicService logic, HttpResponse response) =>
+{
+    var photo = await logic.GetPhotoAsync(id);
+    if (photo is null) return Results.NotFound();
+
+    var storagePath = config["AcceptancePhotos:StoragePath"];
+    if (string.IsNullOrEmpty(storagePath)) return Results.NotFound();
+
+    var filePath = Path.Combine(storagePath, photo.FileName);
+    if (!File.Exists(filePath)) return Results.NotFound();
+
+    var contentType = Path.GetExtension(photo.FileName).ToLowerInvariant() switch
+    {
+        ".jpg" or ".jpeg" => "image/jpeg",
+        ".png"  => "image/png",
+        ".webp" => "image/webp",
+        _ => "image/jpeg"
+    };
+    response.Headers.CacheControl = "private, max-age=3600";
+    return Results.File(filePath, contentType);
+});
+
+app.MapDelete("/api/acceptance-photo/{id:guid}", async (Guid id, IConfiguration config, LogicService logic) =>
+{
+    var photo = await logic.GetPhotoAsync(id);
+    if (photo is null) return Results.NotFound();
+
+    var storagePath = config["AcceptancePhotos:StoragePath"];
+    if (!string.IsNullOrEmpty(storagePath))
+    {
+        var filePath = Path.Combine(storagePath, photo.FileName);
+        if (File.Exists(filePath)) File.Delete(filePath);
+    }
+    await logic.DeletePhotoAsync(id);
+    return Results.Ok();
+});
+
 app.Run();

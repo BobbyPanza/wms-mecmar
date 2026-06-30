@@ -1,0 +1,91 @@
+@inherits LayoutComponentBase
+@inject SessionService Session
+@inject NavigationManager Nav
+@inject IConfiguration Config
+@inject IJSRuntime JS
+
+<MudThemeProvider Theme="_theme" IsDarkMode="true" />
+<MudPopoverProvider />
+<MudDialogProvider />
+<MudSnackbarProvider />
+
+<MudLayout>
+    <MudAppBar Dense="true" Fixed="true" Elevation="2" Style="background:#1a2a1a;">
+        <MudIcon Icon="@Icons.Material.Filled.AdminPanelSettings" Style="color:#ffc200;margin-right:8px;" />
+        <MudText Typo="Typo.h6" Style="color:#ffc200;font-weight:700;letter-spacing:0.03em;">
+            WMS Admin — Mecmar
+        </MudText>
+        <MudSpacer />
+        @if (Session.IsLoggedIn)
+        {
+            <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.7);margin-right:12px;">
+                @Session.OperatorName (@Session.GroupCode)
+            </MudText>
+        }
+        <MudIconButton Icon="@Icons.Material.Filled.ExitToApp"
+                       Color="Color.Default"
+                       title="Torna al WMS"
+                       OnClick="@(() => Nav.NavigateTo("/home"))" />
+    </MudAppBar>
+
+    <MudDrawer Open="true" Variant="DrawerVariant.Persistent"
+               Style="margin-top:48px;background:#161f16;" Elevation="1">
+        <MudNavMenu>
+            <MudNavLink Href="/admin/inventory"
+                        Icon="@Icons.Material.Filled.Inventory"
+                        Match="NavLinkMatch.Prefix">
+                Inventari
+            </MudNavLink>
+            <MudNavLink Href="/admin/picklists"
+                        Icon="@Icons.Material.Filled.FormatListBulleted"
+                        Match="NavLinkMatch.Prefix">
+                Liste di Prelievo
+            </MudNavLink>
+            <MudNavLink Href="/admin/acceptance"
+                        Icon="@Icons.Material.Filled.LocalShipping"
+                        Match="NavLinkMatch.Prefix">
+                Accettazioni
+            </MudNavLink>
+        </MudNavMenu>
+    </MudDrawer>
+
+    <MudMainContent Style="padding-top:48px;">
+        <div style="padding:20px;">
+            @Body
+        </div>
+    </MudMainContent>
+</MudLayout>
+
+@code {
+    private MudTheme _theme = new()
+    {
+        PaletteDark = new PaletteDark
+        {
+            Primary        = "#ffc200",
+            Background     = "#111811",
+            Surface        = "#1a241a",
+            AppbarBackground = "#1a2a1a",
+            DrawerBackground = "#161f16",
+        }
+    };
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        if (Session.IsLoggedIn) return;
+
+        try
+        {
+            var code  = await JS.InvokeAsync<string?>("localStorage.getItem", "wms-op-code");
+            var name  = await JS.InvokeAsync<string?>("localStorage.getItem", "wms-op-name");
+            var role  = await JS.InvokeAsync<string?>("localStorage.getItem", "wms-op-role");
+            if (!string.IsNullOrEmpty(code) && !string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(role))
+            {
+                var groupCode = await JS.InvokeAsync<string?>("localStorage.getItem", "wms-op-group") ?? "";
+                Session.Login(code, name, role, groupCode);
+                StateHasChanged();
+            }
+        }
+        catch { }
+    }
+}

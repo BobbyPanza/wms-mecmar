@@ -1,0 +1,78 @@
+@using System.Globalization
+
+<MudDialog>
+    <TitleContent>
+        <MudText Typo="Typo.h6">Chiudi lista</MudText>
+    </TitleContent>
+
+    <DialogContent>
+        <MudText Class="mb-3">Chiudere la lista? Non apparirà più tra quelle in corso.</MudText>
+
+        @if (VersamentoItems.Count > 0)
+        {
+            <MudDivider Class="mb-3" />
+            <MudText Typo="Typo.subtitle2" Class="mb-2">Versamento bolle</MudText>
+
+            @foreach (var v in VersamentoItems)
+            {
+                var selected = _selected.Contains(v.PickOlCod);
+                <MudPaper Elevation="0" Class="pa-2 mb-2" Style="@($"background:{(selected ? "#1a2a1a" : "#1e1f1f")};border-radius:6px;border:1px solid {(selected ? "#2d4a2d" : "#333")};")">
+                    <div class="d-flex align-center gap-2">
+                        <MudSwitch Value="@selected"
+                                   ValueChanged="@((bool v2) => Toggle(v.PickOlCod, v2))"
+                                   Color="Color.Success" Size="Size.Small" />
+                        <div style="flex:1;min-width:0;">
+                            <div class="d-flex justify-space-between align-center">
+                                <MudText Style="font-family:monospace;font-size:.85rem;font-weight:700;">@v.ArticleCode</MudText>
+                                <MudText Style="font-weight:700;color:#4CAF50;white-space:nowrap;font-size:.9rem;">
+                                    @Fmt(v.Qty) @v.UoM
+                                </MudText>
+                            </div>
+                            <MudText Typo="Typo.caption" Style="color:#94A3B8;">@v.ArticleDesc</MudText>
+                            <MudText Typo="Typo.caption" Style="color:#64748B;">
+                                Bolla: @v.PickOlCod → vers. @v.BollaVersamento
+                            </MudText>
+                        </div>
+                    </div>
+                </MudPaper>
+            }
+        }
+    </DialogContent>
+
+    <DialogActions>
+        <MudButton OnClick="Cancel">Annulla</MudButton>
+        <MudButton Variant="Variant.Filled" Color="Color.Error" OnClick="Confirm">Chiudi lista</MudButton>
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [CascadingParameter] IMudDialogInstance MudDialog { get; set; } = default!;
+
+    [Parameter] public List<PickListVersamentoInfoDto> VersamentoItems { get; set; } = [];
+    [Parameter] public bool DefaultVersamento { get; set; }
+
+    private HashSet<string> _selected = [];
+
+    protected override void OnParametersSet()
+    {
+        _selected = DefaultVersamento
+            ? VersamentoItems.Select(v => v.PickOlCod).ToHashSet()
+            : [];
+    }
+
+    private void Toggle(string olCod, bool on)
+    {
+        if (on) _selected.Add(olCod);
+        else    _selected.Remove(olCod);
+    }
+
+    private void Cancel()  => MudDialog.Cancel();
+
+    private void Confirm()
+    {
+        var selected = VersamentoItems.Where(v => _selected.Contains(v.PickOlCod)).ToList();
+        MudDialog.Close(DialogResult.Ok(selected));
+    }
+
+    private static string Fmt(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+}

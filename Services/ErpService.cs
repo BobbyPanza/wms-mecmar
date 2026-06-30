@@ -12,6 +12,7 @@ namespace WMS.Services;
 public class ErpService
 {
     private readonly string? _connStr;
+    private readonly string? _vaultDocBaseUrl;
     private readonly string[] _allowedWarehouses;
     private readonly ILogger<ErpService> _log;
 
@@ -20,6 +21,7 @@ public class ErpService
     public ErpService(IConfiguration config, IOptions<WmsOptions> wmsOpts, ILogger<ErpService> log)
     {
         _connStr = config.GetConnectionString("ErpDatabase");
+        _vaultDocBaseUrl = config["VaultDoc:BaseUrl"]?.TrimEnd('/');
         _allowedWarehouses = wmsOpts.Value.AllowedWarehouses;
         _log = log;
     }
@@ -32,7 +34,7 @@ public class ErpService
     /// Valida codice + PIN contro A_OPR.
     /// Ritorna (ok, nome, role) dove role è "SUP" per supervisori, "OP" per tutti gli altri.
     /// </summary>
-    public async Task<(bool Ok, string? Name, string? Role)> TryLoginAsync(string opcod, string pin)
+    public async Task<(bool Ok, string? Name, string? Role, string? GroupCode)> TryLoginAsync(string opcod, string pin)
     {
         try
         {
@@ -41,12 +43,12 @@ public class ErpService
                 "SELECT OPCOD, OPDSC, OPPSW, GRCOD FROM dbo.A_OPR WHERE OPCOD = @Opcod",
                 new { Opcod = opcod.Trim().ToUpper() });
 
-            if (row is null) return (false, null, null);
-            if ((row.OPPSW ?? "") != pin) return (false, null, null);
+            if (row is null) return (false, null, null, null);
+            if ((row.OPPSW ?? "") != pin) return (false, null, null, null);
 
-            // GRCOD "SUP" → supervisore (adattare se il codice gruppo è diverso)
-            var role = string.Equals(row.GRCOD, "SUP", StringComparison.OrdinalIgnoreCase) ? "SUP" : "OP";
-            return (true, row.OPDSC, role);
+            var grcod = row.GRCOD ?? "";
+            var role  = string.Equals(grcod, "SUP", StringComparison.OrdinalIgnoreCase) ? "SUP" : "OP";
+            return (true, row.OPDSC, role, grcod);
         }
         catch (Exception ex)
         {
@@ -68,7 +70,13 @@ public class ErpService
             using var db = Open();
 
             var art = await db.QueryFirstOrDefaultAsync<ParRow>(
-                "SELECT PACOD, PADSC, PAUDM FROM dbo.A_PAR WHERE PACOD = @Code",
+                @"SELECT p.PACOD, p.PADSC, p.PAUDM,
+                         COALESCE(p.PAPDR, 0) AS PAPDR,
+                         COALESCE(pq.PAORD, 0) AS PAORD,
+                         COALESCE(pq.PAIMP, 0) AS PAIMP
+                  FROM dbo.A_PAR p
+                  LEFT JOIN dbo.L_PAQT pq ON pq.PACOD = p.PACOD
+                  WHERE p.PACOD = @Code",
                 new { Code = code.Trim() });
             if (art is null) return null;
 
@@ -113,6 +121,8 @@ public class ErpService
                 LocationCode:  m.LCCOD ?? ""
             )).ToList();
 
+            var (orders, engagements) = await GetArticleAvailabilityAsync(art.PACOD!, db);
+
             return new ArticleDto(
                 Code:            art.PACOD ?? code,
                 Description:     art.PADSC ?? "",
@@ -120,7 +130,12 @@ public class ErpService
                 TotalStock:      locationDtos.Sum(l => l.Quantity),
                 MinStock:        locationDtos.Select(l => l.MinQty).FirstOrDefault(),
                 Locations:       locationDtos,
-                RecentMovements: movDtos
+                RecentMovements: movDtos,
+                Ordered:         art.PAORD,
+                Engaged:         art.PAIMP,
+                MinStockPdr:     art.PAPDR,
+                Orders:          orders,
+                Engagements:     engagements
             );
         }
         catch (Exception ex)
@@ -128,6 +143,47 @@ public class ErpService
             _log.LogError(ex, "ErpService.GetArticleAsync fallito per {Code}", code);
             throw;
         }
+    }
+
+    private async Task<(List<ArticleOrderLineDto> Orders, List<ArticleOrderLineDto> Engagements)>
+        GetArticleAvailabilityAsync(string pacod, SqlConnection db)
+    {
+        try
+        {
+            var rows = (await db.QueryAsync<OrdLineRow>(
+                @"SELECT RowType, OrderCode, Description, Qty, DueDate
+                  FROM dbo.WMS_V_ArticleAvailability
+                  WHERE PACOD = @P ORDER BY DueDate",
+                new { P = pacod })).ToList();
+
+            // RowType 5 = ordine produzione, 7 = ordine acquisto
+            var orders = rows
+                .Where(r => r.RowType is 5 or 7)
+                .Select(r => new ArticleOrderLineDto(r.OrderCode ?? "", r.Description ?? "", r.Qty, r.DueDate))
+                .ToList();
+
+            // RowType 3 = riga ordine cliente, 4 = impegno produzione, 6 = workplan
+            var engaged = rows
+                .Where(r => r.RowType is 3 or 4 or 6)
+                .Select(r => new ArticleOrderLineDto(r.OrderCode ?? "", r.Description ?? "", r.Qty, r.DueDate))
+                .ToList();
+
+            return (orders, engaged);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "GetArticleAvailabilityAsync {Pacod}", pacod);
+            return ([], []);
+        }
+    }
+
+    private class OrdLineRow
+    {
+        public short     RowType     { get; set; }
+        public string?   OrderCode   { get; set; }
+        public string?   Description { get; set; }
+        public decimal   Qty         { get; set; }
+        public DateTime? DueDate     { get; set; }
     }
 
     // ─── Locazioni ────────────────────────────────────────────────────────────
@@ -153,7 +209,7 @@ public class ErpService
             var lcCod = loc.LCCOD ?? locationCode;
 
             var contents = (await db.QueryAsync<ContentRow>(
-                @"SELECT m.PACOD, p.PADSC, p.PAUDM, m.QTLOC
+                @"SELECT TOP 200 m.PACOD, p.PADSC, p.PAUDM, m.QTLOC
                   FROM dbo.L_MLPA m
                   LEFT JOIN dbo.A_PAR p ON p.PACOD = m.PACOD
                   WHERE m.MGCOD = @MgCod AND m.LCCOD = @LcCod AND m.QTLOC > 0
@@ -690,24 +746,40 @@ public class ErpService
         {
             using var db = Open();
             var rows = (await db.QueryAsync<PickListRow>(
-                @"SELECT OLCOD, PACOD, PADSC, PAUDM,
-                         Handling, Ubicazione, Giacenza,
-                         QtaDaPrelevare, QtaPrelevata, CONUM, LOCOD
-                  FROM dbo.WMS_V_PickList
-                  WHERE OLCOD = @OlCod
-                  ORDER BY Handling, PADSC",
+                @"SELECT v.OLCOD, v.PACOD, v.PADSC, v.PAUDM,
+                         v.Handling, v.Ubicazione, v.Giacenza,
+                         v.QtaDaPrelevare, v.QtaPrelevata, v.CONUM, v.LOCOD,
+                         COALESCE(p.PAF02,'') AS Paf02Real,
+                         sp.Description       AS SpecsDesc
+                  FROM dbo.WMS_V_PickList v
+                  LEFT JOIN dbo.A_PAR p  ON p.PACOD  = v.PACOD
+                  LEFT JOIN dbo.SpecsPart sp ON sp.ID = p.IDSpec
+                  WHERE v.OLCOD = @OlCod
+                  ORDER BY v.Handling, v.PADSC",
                 new { OlCod = olCod.Trim().ToUpper() })).ToList();
 
             return rows
-                .Select((r, i) => new PickListRowDto
+                .GroupBy(r => (Pacod: r.PACOD ?? "", Olcod: r.OLCOD ?? ""))
+                .Select(g =>
                 {
-                    ArticleCode      = r.PACOD ?? "",
-                    ArticleDesc      = r.PADSC ?? "",
-                    UoM              = r.PAUDM ?? "",
-                    PlannedQty       = Math.Max(0, r.QtaDaPrelevare - r.QtaPrelevata),
-                    OlCod            = r.OLCOD,
-                    Handling         = r.Handling ?? "",
-                    Paf02            = r.Ubicazione ?? ""
+                    var first          = g.First();
+                    var qtaDaPrelevare = g.Sum(r => r.QtaDaPrelevare);
+                    // QtaPrelevata è identica su tutte le righe duplicate (stessa join S_PAP per OLCOD+PACOD)
+                    var qtaPrelevata   = g.Max(r => r.QtaPrelevata);
+                    var paf02          = g.Select(r => r.Paf02Real).FirstOrDefault(s => !string.IsNullOrEmpty(s))
+                                        ?? g.Select(r => r.Ubicazione).FirstOrDefault(s => !string.IsNullOrEmpty(s))
+                                        ?? "";
+                    return new PickListRowDto
+                    {
+                        ArticleCode      = first.PACOD ?? "",
+                        ArticleDesc      = first.PADSC ?? "",
+                        UoM              = first.PAUDM ?? "",
+                        PlannedQty       = Math.Max(0, qtaDaPrelevare - qtaPrelevata),
+                        OlCod            = first.OLCOD,
+                        Handling         = first.Handling ?? "",
+                        Paf02            = paf02,
+                        SpecsDescription = first.SpecsDesc
+                    };
                 })
                 .Where(r => r.PlannedQty > 0)
                 .ToList();
@@ -715,6 +787,75 @@ public class ErpService
         catch (Exception ex)
         {
             _log.LogError(ex, "ErpService.GetPickListRowsForOlCodAsync {OlCod}", olCod);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Per ogni OlCod fornito, ritorna le info di versamento se la fase è abilitata
+    /// (A_LAV.FAABV='Y' e LAUFC='Y'). Un OlCod senza fase abilitata non compare nel risultato.
+    /// </summary>
+    public async Task<List<PickListVersamentoInfoDto>> GetVersamentoInfoForOlCodsAsync(
+        IEnumerable<string> olCods)
+    {
+        var list = olCods.Select(c => c.Trim().ToUpper()).Distinct().ToList();
+        if (list.Count == 0) return [];
+        try
+        {
+            using var db = Open();
+            return (await db.QueryAsync<PickListVersamentoInfoDto>(
+                @"SELECT DISTINCT
+                      odla.OLCOD  AS PickOlCod,
+                      lav.OLCOD   AS BollaVersamento,
+                      lot.PACOD   AS ArticleCode,
+                      lot.PADSC   AS ArticleDesc,
+                      lot.PAUDM   AS UoM,
+                      lot.LOQTP   AS Qty
+                  FROM dbo.L_ODLA odla
+                  JOIN dbo.A_LOT  lot ON lot.CONUM = odla.CONUM AND lot.LOCOD = odla.LOCOD
+                  JOIN dbo.A_LAV  lav ON lav.CONUM = lot.CONUM  AND lav.LOCOD = lot.LOCOD
+                                     AND lav.FAABV = 'Y' AND lav.LAUFC = 'Y'
+                  WHERE odla.OLCOD IN @OlCods
+                    AND lav.OLCOD IS NOT NULL",
+                new { OlCods = list })).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.GetVersamentoInfoForOlCodsAsync");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Esegue il versamento di una riga: chiama WMS_InsertVersamentoLine su sessione già aperta.
+    /// </summary>
+    public async Task<(int IdMov, string ErrMsg)> InsertVersamentoLineAsync(
+        string bollaVers, string pacod, string padsc, string paudm, decimal paqtb,
+        string opCode, int nodeId, int idSes,
+        string mgCod = "", string lcCod = "")
+    {
+        try
+        {
+            using var db = Open();
+            var p = new DynamicParameters();
+            p.Add("@BollaVers", bollaVers);
+            p.Add("@PACOD",     pacod);
+            p.Add("@PADSC",     padsc);
+            p.Add("@PAUDM",     paudm);
+            p.Add("@PAQTB",     paqtb);
+            p.Add("@OPCOD",     opCode);
+            p.Add("@NOCOD",     (short)nodeId);
+            p.Add("@IDSES",     idSes);
+            p.Add("@MGCOD",     mgCod);
+            p.Add("@LCCOD",     lcCod);
+            p.Add("@IDMOV",     dbType: System.Data.DbType.Int32, direction: System.Data.ParameterDirection.Output);
+            p.Add("@ErrMsg",    dbType: System.Data.DbType.String, size: 255, direction: System.Data.ParameterDirection.Output);
+            await db.ExecuteAsync("dbo.WMS_InsertVersamentoLine", p, commandType: System.Data.CommandType.StoredProcedure);
+            return (p.Get<int>("@IDMOV"), p.Get<string>("@ErrMsg") ?? "");
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.InsertVersamentoLineAsync {BollaVers}/{Pacod}", bollaVers, pacod);
             throw;
         }
     }
@@ -786,6 +927,54 @@ public class ErpService
         }
     }
 
+    // ─── Documenti articolo (VaultDoc) ───────────────────────────────────────
+
+    public async Task<List<ArticleDocument>> GetArticleDocumentsAsync(string pacod)
+    {
+        if (string.IsNullOrEmpty(_vaultDocBaseUrl)) return [];
+        try
+        {
+            using var db = Open();
+            var rows = await db.QueryAsync<VaultDocRow>(
+                "SELECT RelativePath, Nome FROM dbo.WMS_V_ArticleDocuments WHERE PACOD = @Pacod",
+                new { Pacod = pacod });
+            return rows.Select(r => new ArticleDocument(r.Nome ?? "", $"{_vaultDocBaseUrl}/{r.RelativePath}")).ToList();
+        }
+        catch (Exception ex) { _log.LogError(ex, "ErpService.GetArticleDocumentsAsync {Pacod}", pacod); throw; }
+    }
+
+    // ─── Dettaglio articolo (dialog info) ────────────────────────────────────
+
+    public async Task<ArticleInfoDto?> GetArticleInfoAsync(string code)
+    {
+        try
+        {
+            using var db = Open();
+            var row = await db.QueryFirstOrDefaultAsync<ArticleInfoRow>(
+                @"SELECT p.PACOD, p.PADSC, p.PAUDM,
+                         COALESCE(p.FMCOD, '') AS FMCOD,
+                         COALESCE(p.PAF02, '') AS PAF02,
+                         thp.THDSC             AS Handling,
+                         sp.Description        AS SpecsDesc
+                  FROM dbo.A_PAR p
+                  LEFT JOIN dbo.A_THP     thp ON thp.IDTHP = p.IDTHP
+                  LEFT JOIN dbo.SpecsPart sp  ON sp.ID      = p.IDSpec
+                  WHERE p.PACOD = @Code",
+                new { Code = code.Trim().ToUpper() });
+            if (row is null) return null;
+            return new ArticleInfoDto(
+                row.PACOD ?? "",
+                row.PADSC ?? "",
+                row.PAUDM ?? "",
+                row.FMCOD ?? "",
+                row.PAF02 ?? "",
+                row.Handling,
+                row.SpecsDesc
+            );
+        }
+        catch (Exception ex) { _log.LogError(ex, "ErpService.GetArticleInfoAsync {Code}", code); throw; }
+    }
+
     // ─── Gestione Locazioni ───────────────────────────────────────────────────
 
     /// <summary>Tutti i magazzini (MGCOD distinti da A_LOC), ordinati.</summary>
@@ -824,8 +1013,9 @@ public class ErpService
         try
         {
             using var db = Open();
+            // LCSTO = Stato Locazione, NOT NULL — 9 = attiva/normale (default Mecmar)
             await db.ExecuteAsync(
-                "INSERT INTO dbo.A_LOC (MGCOD, LCCOD) VALUES (@Mg, @Lc)",
+                "INSERT INTO dbo.A_LOC (MGCOD, LCCOD, LCSTO) VALUES (@Mg, @Lc, 9)",
                 new { Mg = mgCod, Lc = lcCod.Trim().ToUpper() });
         }
         catch (Exception ex) { _log.LogError(ex, "CreateLocationAsync {Mg}/{Lc}", mgCod, lcCod); throw; }
@@ -877,7 +1067,7 @@ public class ErpService
         {
             using var db = Open();
             await db.ExecuteAsync(
-                "UPDATE dbo.L_MLPA SET LCPRC=NULL WHERE PACOD=@Pa",
+                "UPDATE dbo.L_MLPA SET LCPRC='N' WHERE PACOD=@Pa",
                 new { Pa = articleCode });
             await db.ExecuteAsync(
                 "UPDATE dbo.L_MLPA SET LCPRC='Y' WHERE PACOD=@Pa AND MGCOD=@Mg AND LCCOD=@Lc",
@@ -932,10 +1122,17 @@ public class ErpService
             var lines = new List<AccDocLineRow>();
             foreach (var chunk in Chunk(docIds, 1000))
                 lines.AddRange(await db.QueryAsync<AccDocLineRow>(
-                    @"SELECT IDRIG, IDTES, PACOD, DRDSC, DRUMI, DRQTI
-                      FROM dbo.WMS_V_AcceptanceLines
-                      WHERE IDTES IN @Ids
-                      ORDER BY IDTES, DRPOS, IDRIG",
+                    @"SELECT v.IDRIG, v.IDTES, v.PACOD, v.DRDSC, v.DRUMI, v.DRQTI,
+                             cr.MGCOD AS DRCR_MGCOD, cr.LCCOD AS DRCR_LCCOD
+                      FROM dbo.WMS_V_AcceptanceLines v
+                      LEFT JOIN (
+                          SELECT IDRIG, MGCOD, LCCOD,
+                                 ROW_NUMBER() OVER (PARTITION BY IDRIG ORDER BY ID) AS rn
+                          FROM dbo.L_DRCR
+                          WHERE CMTYP = 1
+                      ) cr ON cr.IDRIG = v.IDRIG AND cr.rn = 1
+                      WHERE v.IDTES IN @Ids
+                      ORDER BY v.IDTES, v.DRPOS, v.IDRIG",
                     new { Ids = chunk }));
 
             return headers.Select(h => new AcceptanceDocDto(
@@ -948,12 +1145,14 @@ public class ErpService
                     .Where(r => r.IDTES == h.IDTES)
                     .Select(r => new AcceptanceItemDto
                     {
-                        ErpLineId   = r.IDRIG,
-                        ErpDocId    = h.IDTES,
-                        ArticleCode = r.PACOD ?? "",
-                        ArticleDesc = r.DRDSC ?? "",
-                        UoM         = r.DRUMI ?? "",
-                        ExpectedQty = r.DRQTI
+                        ErpLineId              = r.IDRIG,
+                        ErpDocId               = h.IDTES,
+                        ArticleCode            = r.PACOD ?? "",
+                        ArticleDesc            = r.DRDSC ?? "",
+                        UoM                    = r.DRUMI ?? "",
+                        ExpectedQty            = r.DRQTI,
+                        SuggestedWarehouseCode = r.DRCR_MGCOD ?? "",
+                        SuggestedLocationCode  = r.DRCR_LCCOD ?? ""
                     }).ToList()
             )).ToList();
         }
@@ -974,20 +1173,29 @@ public class ErpService
         {
             using var db = Open();
             var rows = (await db.QueryAsync<AccDocLineRow>(
-                @"SELECT IDRIG, IDTES, PACOD, DRDSC, DRUMI, DRQTI
-                  FROM dbo.WMS_V_AcceptanceLines
-                  WHERE IDTES = @DocId
-                  ORDER BY DRPOS, IDRIG",
+                @"SELECT v.IDRIG, v.IDTES, v.PACOD, v.DRDSC, v.DRUMI, v.DRQTI,
+                         cr.MGCOD AS DRCR_MGCOD, cr.LCCOD AS DRCR_LCCOD
+                  FROM dbo.WMS_V_AcceptanceLines v
+                  LEFT JOIN (
+                      SELECT IDRIG, MGCOD, LCCOD,
+                             ROW_NUMBER() OVER (PARTITION BY IDRIG ORDER BY ID) AS rn
+                      FROM dbo.L_DRCR
+                      WHERE CMTYP = 1
+                  ) cr ON cr.IDRIG = v.IDRIG AND cr.rn = 1
+                  WHERE v.IDTES = @DocId
+                  ORDER BY v.DRPOS, v.IDRIG",
                 new { DocId = erpDocId })).ToList();
 
             return rows.Select(r => new AcceptanceItemDto
             {
-                ErpLineId   = r.IDRIG,
-                ErpDocId    = erpDocId,
-                ArticleCode = r.PACOD ?? "",
-                ArticleDesc = r.DRDSC ?? "",
-                UoM         = r.DRUMI ?? "",
-                ExpectedQty = r.DRQTI
+                ErpLineId              = r.IDRIG,
+                ErpDocId               = erpDocId,
+                ArticleCode            = r.PACOD ?? "",
+                ArticleDesc            = r.DRDSC ?? "",
+                UoM                    = r.DRUMI ?? "",
+                ExpectedQty            = r.DRQTI,
+                SuggestedWarehouseCode = r.DRCR_MGCOD ?? "",
+                SuggestedLocationCode  = r.DRCR_LCCOD ?? ""
             }).ToList();
         }
         catch (Exception ex)
@@ -1069,26 +1277,45 @@ public class ErpService
     }
 
     /// <summary>
-    /// Esegue il carico merce in accettazione via TRD_InsertMov con causale configurabile.
-    /// Collega il movimento al documento DDT tramite IDRIF e alla riga tramite IDTBR.
-    /// Ritorna IDMOV (>0) oppure ≤0 se la causale non è valida.
+    /// Esegue l'accettazione merce via TRD_InsertMov.
+    /// Se srcMgcod/srcLccod sono valorizzati: SMI (scarico da L_DRCR) + causale carico (es. CMI).
+    /// Altrimenti: solo causale carico (retrocompatibile).
+    /// Ritorna IDMOV del carico (>0) oppure ≤0 se la causale non è valida.
     /// </summary>
     public async Task<(bool Ok, int IdMov, string Message)> ExecuteAcceptanceLoadAsync(
         string pacod, string mgcod, string lccod, decimal qty,
-        string causal, string operatorCode,
-        int erpDocId, int erpLineId, string docRef)
+        string loadCausal, string dischargeCausal, string operatorCode,
+        int erpDocId, int erpLineId, string docRef,
+        string srcMgcod = "", string srcLccod = "")
     {
-        var refCode = $"WMS-ACC-{docRef}-{DateTime.Now:yyyyMMddHHmmss}";
+        var refCode = $"WMS-ACC-{docRef}-{erpLineId}-{DateTime.Now:HHmmss}";
         try
         {
             using var db = Open();
-            var p = BuildMovParams(pacod, causal, qty, mgcod, lccod, operatorCode, refCode);
-            await db.ExecuteAsync("dbo.TRD_InsertMov", p,
+
+            // Scarico dal magazzino documento se la sorgente è nota
+            if (!string.IsNullOrEmpty(srcLccod))
+            {
+                var pSmi = BuildMovParams(pacod, dischargeCausal, qty, srcMgcod, srcLccod, operatorCode, refCode);
+                await db.ExecuteAsync("dbo.TRD_InsertMov", pSmi,
+                    commandType: System.Data.CommandType.StoredProcedure);
+                var idSmi = pSmi.Get<int>("@ReturnVal");
+                if (idSmi <= 0)
+                    return (false, idSmi,
+                        $"Scarico {dischargeCausal} da {srcLccod} fallito (IDMOV={idSmi} — causale valida?)");
+            }
+
+            // Carico a destinazione
+            var pCmi = BuildMovParams(pacod, loadCausal, qty, mgcod, lccod, operatorCode, refCode);
+            await db.ExecuteAsync("dbo.TRD_InsertMov", pCmi,
                 commandType: System.Data.CommandType.StoredProcedure);
-            var idMov = p.Get<int>("@ReturnVal");
-            if (idMov <= 0)
-                return (false, idMov, $"Carico {causal} fallito (IDMOV={idMov} — causale valida?)");
-            return (true, idMov, $"{causal} #{idMov}: +{qty}");
+            var idCmi = pCmi.Get<int>("@ReturnVal");
+            if (idCmi <= 0)
+                return (false, idCmi,
+                    $"Carico {loadCausal} su {lccod} fallito (IDMOV={idCmi} — causale valida?)");
+
+            var srcInfo = !string.IsNullOrEmpty(srcLccod) ? $"{srcLccod} → " : "";
+            return (true, idCmi, $"{srcInfo}{lccod} +{qty} ({loadCausal} #{idCmi})");
         }
         catch (Exception ex)
         {
@@ -1105,6 +1332,23 @@ public class ErpService
     }
 
     // ─── Row types (Dapper) ───────────────────────────────────────────────────
+
+    private class ArticleInfoRow
+    {
+        public string? PACOD    { get; set; }
+        public string? PADSC    { get; set; }
+        public string? PAUDM    { get; set; }
+        public string? FMCOD    { get; set; }
+        public string? PAF02    { get; set; }
+        public string? Handling  { get; set; }
+        public string? SpecsDesc { get; set; }
+    }
+
+    private class VaultDocRow
+    {
+        public string? RelativePath { get; set; }
+        public string? Nome         { get; set; }
+    }
 
     private class AccDocHeaderRow
     {
@@ -1125,6 +1369,8 @@ public class ErpService
         public string?  DRDSC  { get; set; }   // descrizione riga
         public string?  DRUMI  { get; set; }   // unità di misura riga
         public decimal  DRQTI  { get; set; }   // quantità attesa
+        public string?  DRCR_MGCOD { get; set; }  // L_DRCR — magazzino prelievo
+        public string?  DRCR_LCCOD { get; set; }  // L_DRCR — locazione prelievo
     }
 
     private class MlpaBatchRow
@@ -1146,9 +1392,12 @@ public class ErpService
 
     private class ParRow
     {
-        public string? PACOD { get; set; }
-        public string? PADSC { get; set; }
-        public string? PAUDM { get; set; }
+        public string?  PACOD  { get; set; }
+        public string?  PADSC  { get; set; }
+        public string?  PAUDM  { get; set; }
+        public decimal  PAPDR  { get; set; }   // scorta minima
+        public decimal  PAORD  { get; set; }   // totale ordinato (da L_PAQT)
+        public decimal  PAIMP  { get; set; }   // totale impegnato (da L_PAQT)
     }
 
     private class MlpaRow
@@ -1246,5 +1495,7 @@ public class ErpService
         public decimal  QtaDaPrelevare { get; set; }
         public decimal  QtaPrelevata   { get; set; }
         public int?     IDPAP          { get; set; }
+        public string?  Paf02Real      { get; set; }
+        public string?  SpecsDesc      { get; set; }
     }
 }

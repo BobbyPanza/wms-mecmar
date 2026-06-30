@@ -130,7 +130,7 @@ else if (_article is not null)
                                 </MudText>
                             </div>
                             <MudText Style="@($"font-weight:700;font-size:1.1rem;color:{(mov.Quantity >= 0 ? "#4FAB5B" : "#E05252")}")">
-                                @(mov.Quantity >= 0 ? "+" : "")@mov.Quantity.ToString("N0")
+                                @(mov.Quantity >= 0 ? "+" : "")@mov.Quantity.ToString("0.###")
                             </MudText>
                         </div>
                     </MudPaper>
