@@ -104,9 +104,10 @@ else if (_step == 2)
         </div>
     </MudPaper>
 
+    @* Format: le quantità ERP sono numeric(9,6) e senza questo il campo mostra "8,000000" *@
     <MudNumericField @bind-Value="_newQty" Label="Nuova giacenza"
                      Variant="Variant.Outlined" Min="0m" Step="0.001m" Culture="@CultureInfo.CurrentCulture"
-                     Class="mb-3" AutoFocus="true" />
+                     Format="0.###" Class="mb-3" AutoFocus="true" />
 
     @if (_newQty != _currentQty)
     {
@@ -320,7 +321,7 @@ else if (_step == 3)
                 ["PACOD"] = _article.Code,
                 ["MGCOD"] = _warehouseCode,
                 ["LCCOD"] = _locationCode,
-                ["QTY"]   = _newQty.ToString("G")
+                ["QTY"]   = QtyFmt(_newQty)
             });
             Snackbar.Add(msg, Severity.Success);
         }

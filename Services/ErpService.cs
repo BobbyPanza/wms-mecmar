@@ -1,3 +1,4 @@
+using System.Globalization;
 using Dapper;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Options;
@@ -529,7 +530,7 @@ public class ErpService
             if (idMov <= 0)
                 return (false, $"{pacod}: rettifica {cmcod} fallita (id={idMov})");
 
-            var msg = $"{cmcod} #{idMov}: {(delta > 0 ? "+" : "")}{delta}";
+            var msg = $"{cmcod} #{idMov}: {(delta > 0 ? "+" : "")}{QtyText(delta)}";
 
             // Lo stamp segue il movimento: TRD_InsertMov può aver creato l'abbinamento.
             // Un errore qui non annulla la rettifica, che è già registrata.
@@ -657,6 +658,13 @@ public class ErpService
     // ─── Rettifiche semplici ─────────────────────────────────────────────────
 
     /// <summary>
+    /// Quantità nei messaggi verso l'operatore: max 3 decimali, zeri finali omessi.
+    /// Le colonne ERP sono numeric(9,6), quindi il ToString() grezzo stampa "8,000000".
+    /// Stesso formato usato dalle pagine ("0.###").
+    /// </summary>
+    private static string QtyText(decimal q) => q.ToString("0.###", CultureInfo.CurrentCulture);
+
+    /// <summary>
     /// Rettifica semplice: imposta la giacenza a newQty per articolo+locazione.
     /// Calcola il delta rispetto alla giacenza attuale e invia REP (positivo) o REN (negativo).
     /// Se delta=0 non genera movimento, ma la verifica viene registrata comunque.
@@ -679,8 +687,8 @@ public class ErpService
             {
                 var stamped = await StampLocationVerifiedAsync(db, pacod, mgcod, lccod, operatorCode);
                 return (true, stamped
-                    ? $"{pacod}: giacenza confermata a {newQty} — verifica registrata"
-                    : $"{pacod}: giacenza confermata a {newQty} — abbinamento {mgcod}/{lccod} non presente in L_MLPA, verifica non registrata");
+                    ? $"{pacod}: giacenza confermata a {QtyText(newQty)} — verifica registrata"
+                    : $"{pacod}: giacenza confermata a {QtyText(newQty)} — abbinamento {mgcod}/{lccod} non presente in L_MLPA, verifica non registrata");
             }
 
             var cmcod = delta > 0 ? "REP" : "REN";
@@ -691,7 +699,8 @@ public class ErpService
             if (idMov <= 0)
                 return (false, $"{pacod}: rettifica {cmcod} fallita (id={idMov} — causale REP/REN valida?)");
 
-            var msg = $"{cmcod} #{idMov}: {current} → {newQty} (delta {(delta > 0 ? "+" : "")}{delta})";
+            var msg = $"{cmcod} #{idMov}: {QtyText(current)} → {QtyText(newQty)} " +
+                      $"(delta {(delta > 0 ? "+" : "")}{QtyText(delta)})";
 
             // Lo stamp segue il movimento: TRD_InsertMov può aver creato l'abbinamento.
             // Un errore qui non annulla la rettifica, che è già registrata.

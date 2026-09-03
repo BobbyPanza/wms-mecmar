@@ -30,8 +30,14 @@
 <MudPaper Class="pa-3 mb-3" Elevation="1">
     <MudGrid Spacing="2">
         <MudItem xs="12" sm="6" md="2">
-            <MudSelect T="string" @bind-Value="_warehouse" Label="Magazzino"
+            <MudSelect T="string" Value="_warehouse" ValueChanged="OnWarehouseChanged" Label="Magazzino"
                        Clearable="true" Dense="true" Margin="Margin.Dense">
+                @if (_warehouses.Count == 0)
+                {
+                    <MudSelectItem T="string" Value="@string.Empty" Disabled="true">
+                        (nessun magazzino letto dall'ERP)
+                    </MudSelectItem>
+                }
                 @foreach (var w in _warehouses)
                 {
                     <MudSelectItem T="string" Value="@w.Code">@w.Code — @w.Description</MudSelectItem>
@@ -43,8 +49,14 @@
                           Placeholder="es. WI" Margin="Margin.Dense" Clearable="true" />
         </MudItem>
         <MudItem xs="12" sm="6" md="3">
-            <MudSelect T="string" @bind-Value="_family" Label="Famiglia merceologica"
+            <MudSelect T="string" Value="_family" ValueChanged="OnFamilyChanged" Label="Famiglia merceologica"
                        Clearable="true" Dense="true" Margin="Margin.Dense">
+                @if (_families.Count == 0)
+                {
+                    <MudSelectItem T="string" Value="@string.Empty" Disabled="true">
+                        (nessuna famiglia letta dall'ERP)
+                    </MudSelectItem>
+                }
                 @foreach (var f in _families)
                 {
                     <MudSelectItem T="string" Value="@f.Code">@f.Code — @f.Description</MudSelectItem>
@@ -60,7 +72,8 @@
                            DateFormat="dd/MM/yyyy" Margin="Margin.Dense" Clearable="true" />
         </MudItem>
         <MudItem xs="12" md="1" Class="d-flex align-center">
-            <MudSwitch T="bool" @bind-Value="_onlyNever" Color="Color.Primary" Label="Mai verif." />
+            <MudSwitch T="bool" Value="_onlyNever" ValueChanged="OnOnlyNeverChanged"
+                       Color="Color.Primary" Label="Mai verif." />
         </MudItem>
     </MudGrid>
 
@@ -121,7 +134,7 @@
         </MudTd>
         <MudTd DataLabel="Mag.">@context.WarehouseCode</MudTd>
         <MudTd DataLabel="Locazione">@context.LocationCode</MudTd>
-        <MudTd DataLabel="Qtà" Style="text-align:right;">@context.Quantity.ToString("N2")</MudTd>
+        <MudTd DataLabel="Qtà" Style="text-align:right;">@context.Quantity.ToString("0.###")</MudTd>
         <MudTd DataLabel="Ultima verifica">
             @if (context.VerifiedDate is null)
             {
@@ -241,9 +254,33 @@
         }
     }
 
+    // Le tendine e lo switch applicano subito; testo e date restano su APPLICA
+    // perché si compilano a più battute.
+    private async Task OnWarehouseChanged(string? value)
+    {
+        _warehouse = value;
+        await ApplyFilters();
+    }
+
+    private async Task OnFamilyChanged(string? value)
+    {
+        _family = value;
+        await ApplyFilters();
+    }
+
+    private async Task OnOnlyNeverChanged(bool value)
+    {
+        _onlyNever = value;
+        await ApplyFilters();
+    }
+
     private async Task ApplyFilters()
     {
-        if (_table is not null) await _table.ReloadServerData();
+        if (_table is null) return;
+        // Cambiando filtro il totale cambia: restando sulla pagina corrente
+        // si finirebbe oltre la fine del risultato e la tabella sembrerebbe vuota.
+        if (_table.CurrentPage != 0) _table.NavigateTo(0);
+        await _table.ReloadServerData();
     }
 
     private async Task ClearFilters()
