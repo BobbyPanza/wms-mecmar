@@ -40,6 +40,10 @@ builder.Services.AddSingleton<LogicService>();
 // Singleton = servizio liste di prelievo (Logic DB + ERP)
 builder.Services.AddSingleton<PickListService>();
 
+// Configurazione liste di prelievo (sezione "PickList" in appsettings.json)
+builder.Services.Configure<PickListOptions>(
+    builder.Configuration.GetSection("PickList"));
+
 // Opzioni generali WMS (magazzini abilitati, ecc.)
 builder.Services.Configure<WmsOptions>(
     builder.Configuration.GetSection("Wms"));

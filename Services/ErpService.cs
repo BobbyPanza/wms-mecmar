@@ -40,11 +40,12 @@ public class ErpService
         {
             using var db = Open();
             var row = await db.QueryFirstOrDefaultAsync<OprRow>(
-                "SELECT OPCOD, OPDSC, OPPSW, GRCOD FROM dbo.A_OPR WHERE OPCOD = @Opcod",
+                "SELECT OPCOD, OPDSC, OPPSW, OPPWR, GRCOD FROM dbo.A_OPR WHERE OPCOD = @Opcod",
                 new { Opcod = opcod.Trim().ToUpper() });
 
             if (row is null) return (false, null, null, null);
-            if ((row.OPPSW ?? "") != pin) return (false, null, null, null);
+            var passwordRequired = !string.Equals(row.OPPWR, "N", StringComparison.OrdinalIgnoreCase);
+            if (passwordRequired && (row.OPPSW ?? "") != pin) return (false, null, null, null);
 
             var grcod = row.GRCOD ?? "";
             var role  = string.Equals(grcod, "SUP", StringComparison.OrdinalIgnoreCase) ? "SUP" : "OP";
@@ -54,6 +55,60 @@ public class ErpService
         {
             _log.LogError(ex, "ErpService.TryLoginAsync fallito per {Opcod}", opcod);
             throw;
+        }
+    }
+
+    /// <summary>
+    /// Invia una notifica ERP tramite CompNotify (S_NTF + email).
+    /// Passa un TVP @EmailAttachments vuoto per non allegare file.
+    /// Non esegue dedup (@iReactivate=1): la notifica viene sempre inserita.
+    /// Best-effort: l'eccezione viene loggata ma non rilanciata.
+    /// </summary>
+    public async Task CompGenerateNotifyAsync(int idNtf, string cdNtf, string ntNtf, string? opCod = null)
+    {
+        try
+        {
+            using var db = Open();
+
+            var emptyAttachments = new System.Data.DataTable();
+            emptyAttachments.Columns.Add("FilePath", typeof(string));
+
+            await db.ExecuteAsync(
+                "EXEC dbo.CompNotify @iIDNTF, @sCDNTF, @sNTNTF, @iIDTPN=1, @iIDENN=1, @iReactivate=1, @EmailAttachments=@Attach, @sOPCOD=@OpCod",
+                new
+                {
+                    iIDNTF = idNtf,
+                    sCDNTF = cdNtf,
+                    sNTNTF = ntNtf,
+                    OpCod  = opCod,
+                    Attach = emptyAttachments.AsTableValuedParameter("dbo.S_EmailAttachmentType")
+                });
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.CompGenerateNotifyAsync IDNTF={Id} CDNTF={Cd}", idNtf, cdNtf);
+            // non rilanciare: la notifica è best-effort, non deve bloccare il completamento
+        }
+    }
+
+    /// <summary>
+    /// Ritorna true se l'operatore deve inserire il PIN (OPPWR != 'N').
+    /// Ritorna true anche se il codice non esiste (sicurezza per default).
+    /// </summary>
+    public async Task<bool> OperatorRequiresPinAsync(string opcod)
+    {
+        try
+        {
+            using var db = Open();
+            var oppwr = await db.QueryFirstOrDefaultAsync<string?>(
+                "SELECT OPPWR FROM dbo.A_OPR WHERE OPCOD = @Opcod",
+                new { Opcod = opcod.Trim().ToUpper() });
+            return !string.Equals(oppwr, "N", StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.OperatorRequiresPinAsync fallito per {Opcod}", opcod);
+            return true; // fail-safe: richiedi PIN in caso di errore
         }
     }
 
@@ -293,6 +348,121 @@ public class ErpService
         }
     }
 
+    // ─── Verifiche abbinamento articolo/locazione ────────────────────────────
+
+    /// <summary>Famiglie merceologiche da A_FAM, solo quelle effettivamente usate in A_PAR.</summary>
+    public async Task<List<FamilyDto>> GetFamiliesAsync()
+    {
+        try
+        {
+            using var db = Open();
+            var rows = await db.QueryAsync<(string FMCOD, string FMDSC)>(
+                @"SELECT f.FMCOD, COALESCE(f.FMDSC,'') AS FMDSC
+                  FROM dbo.A_FAM f
+                  WHERE EXISTS (SELECT 1 FROM dbo.A_PAR p WHERE p.FMCOD = f.FMCOD)
+                  ORDER BY f.FMCOD");
+            return rows.Select(r => new FamilyDto(r.FMCOD ?? "", r.FMDSC ?? "")).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.GetFamiliesAsync fallito");
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Colonna di ordinamento per la lista verifiche — whitelist, il nome arriva dalla UI.
+    /// Aggiunge sempre la PK come criterio secondario: senza un ordine totale
+    /// OFFSET/FETCH può ripetere o saltare righe fra pagine consecutive.
+    /// </summary>
+    private static string BuildVerificationOrderBy(string? sortColumn, bool descending)
+    {
+        var col = sortColumn switch
+        {
+            "ArticleCode"   => "m.PACOD",
+            "ArticleDesc"   => "p.PADSC",
+            "FamilyCode"    => "p.FMCOD",
+            "WarehouseCode" => "m.MGCOD",
+            "LocationCode"  => "m.LCCOD",
+            "Quantity"      => "m.QTLOC",
+            "VerifiedUser"  => "m.X_VerifiedUser",
+            _               => "m.X_VerifiedDate"
+        };
+        // ASC su X_VerifiedDate mette i NULL per primi: "mai verificato" = più urgente.
+        return $"{col} {(descending ? "DESC" : "ASC")}, m.PACOD, m.MGCOD, m.LCCOD";
+    }
+
+    /// <summary>
+    /// Abbinamenti articolo/locazione (L_MLPA) con stato di verifica, filtrati e paginati
+    /// lato server — la tabella ha decine di migliaia di righe.
+    /// locationPrefix filtra per inizio codice, così si può isolare una zona (es. "WI").
+    /// verifiedTo è inclusivo sul giorno indicato.
+    /// </summary>
+    public async Task<(List<LocationVerificationRow> Rows, int Total)> GetLocationVerificationsAsync(
+        string? warehouseCode, string? locationPrefix, string? familyCode,
+        DateTime? verifiedFrom, DateTime? verifiedTo, bool onlyNeverVerified,
+        string? sortColumn, bool sortDescending,
+        int page, int pageSize)
+    {
+        const string fromSql = @"
+            FROM dbo.L_MLPA m
+            JOIN dbo.A_PAR  p ON p.PACOD = m.PACOD
+            LEFT JOIN dbo.A_FAM f ON f.FMCOD = p.FMCOD
+            LEFT JOIN dbo.A_OPR o ON o.OPCOD = m.X_VerifiedUser";
+
+        const string whereSql = @"
+            WHERE (@Mg IS NULL OR m.MGCOD = @Mg)
+              AND (@Lc IS NULL OR m.LCCOD LIKE @Lc)
+              AND (@Fm IS NULL OR p.FMCOD = @Fm)
+              AND (@From IS NULL OR m.X_VerifiedDate >= @From)
+              AND (@To   IS NULL OR m.X_VerifiedDate <  @To)
+              AND (@OnlyNever = 0 OR m.X_VerifiedDate IS NULL)";
+
+        var sql = $@"
+            SELECT COUNT(*) {fromSql} {whereSql};
+
+            SELECT m.PACOD                                  AS ArticleCode,
+                   COALESCE(p.PADSC,'')                     AS ArticleDesc,
+                   COALESCE(p.FMCOD,'')                     AS FamilyCode,
+                   COALESCE(f.FMDSC,'')                     AS FamilyDesc,
+                   m.MGCOD                                  AS WarehouseCode,
+                   m.LCCOD                                  AS LocationCode,
+                   m.QTLOC                                  AS Quantity,
+                   CASE WHEN m.LCPRC = 'Y' THEN 1 ELSE 0 END AS IsMainLocation,
+                   m.X_VerifiedUser                         AS VerifiedUser,
+                   o.OPDSC                                  AS VerifiedUserName,
+                   m.X_VerifiedDate                         AS VerifiedDate
+            {fromSql} {whereSql}
+            ORDER BY {BuildVerificationOrderBy(sortColumn, sortDescending)}
+            OFFSET @Skip ROWS FETCH NEXT @Take ROWS ONLY;";
+
+        var args = new
+        {
+            Mg        = string.IsNullOrWhiteSpace(warehouseCode) ? null : warehouseCode.Trim(),
+            Lc        = string.IsNullOrWhiteSpace(locationPrefix) ? null : locationPrefix.Trim().ToUpper() + "%",
+            Fm        = string.IsNullOrWhiteSpace(familyCode) ? null : familyCode.Trim(),
+            From      = verifiedFrom?.Date,
+            To        = verifiedTo?.Date.AddDays(1),
+            OnlyNever = onlyNeverVerified ? 1 : 0,
+            Skip      = page * pageSize,
+            Take      = pageSize
+        };
+
+        try
+        {
+            using var db = Open();
+            using var grid = await db.QueryMultipleAsync(sql, args);
+            var total = await grid.ReadFirstAsync<int>();
+            var rows  = (await grid.ReadAsync<LocationVerificationRow>()).ToList();
+            return (rows, total);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "ErpService.GetLocationVerificationsAsync fallito");
+            throw;
+        }
+    }
+
     /// <summary>
     /// Righe inventario: L_MLPA JOIN A_PAR per magazzino + prefisso zona opzionale.
     /// </summary>
@@ -332,23 +502,49 @@ public class ErpService
 
     /// <summary>
     /// Applica rettifica inventario: CINV (delta > 0) o SINV (delta &lt; 0).
-    /// Delta = 0 non genera movimento.
+    /// Delta = 0 non genera movimento, ma la verifica viene registrata comunque
+    /// (L_MLPA.X_VerifiedUser/X_VerifiedDate) — la riga è stata contata e confermata.
     /// </summary>
     public async Task<(bool Ok, string Message)> ExecuteInventoryAdjustmentAsync(
         string pacod, string mgcod, string lccod,
         decimal delta, string operatorCode, string sessionRef)
     {
-        if (delta == 0m) return (true, "nessuna rettifica");
-        var cmcod = delta > 0 ? "CINV" : "SINV";
         try
         {
             using var db = Open();
+
+            // Quantità confermata: nessun movimento, ma l'abbinamento è stato verificato.
+            if (delta == 0m)
+            {
+                var stamped = await StampLocationVerifiedAsync(db, pacod, mgcod, lccod, operatorCode);
+                return (true, stamped
+                    ? "confermato — verifica registrata"
+                    : $"confermato — abbinamento {mgcod}/{lccod} non presente in L_MLPA, verifica non registrata");
+            }
+
+            var cmcod = delta > 0 ? "CINV" : "SINV";
             var p = BuildMovParams(pacod, cmcod, Math.Abs(delta), mgcod, lccod, operatorCode, sessionRef);
             await db.ExecuteAsync("dbo.TRD_InsertMov", p, commandType: System.Data.CommandType.StoredProcedure);
             var idMov = p.Get<int>("@ReturnVal");
             if (idMov <= 0)
                 return (false, $"{pacod}: rettifica {cmcod} fallita (id={idMov})");
-            return (true, $"{cmcod} #{idMov}: {(delta > 0 ? "+" : "")}{delta}");
+
+            var msg = $"{cmcod} #{idMov}: {(delta > 0 ? "+" : "")}{delta}";
+
+            // Lo stamp segue il movimento: TRD_InsertMov può aver creato l'abbinamento.
+            // Un errore qui non annulla la rettifica, che è già registrata.
+            try
+            {
+                await StampLocationVerifiedAsync(db, pacod, mgcod, lccod, operatorCode);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Stamp verifica L_MLPA fallito dopo {CmCod} #{IdMov} per {Pacod} {Mg}/{Lc}",
+                    cmcod, idMov, pacod, mgcod, lccod);
+                msg += " — verifica non registrata";
+            }
+
+            return (true, msg);
         }
         catch (Exception ex)
         {
@@ -463,7 +659,7 @@ public class ErpService
     /// <summary>
     /// Rettifica semplice: imposta la giacenza a newQty per articolo+locazione.
     /// Calcola il delta rispetto alla giacenza attuale e invia REP (positivo) o REN (negativo).
-    /// Se delta=0 non genera movimento.
+    /// Se delta=0 non genera movimento, ma la verifica viene registrata comunque.
     /// </summary>
     public async Task<(bool Ok, string Message)> ExecuteAdjustmentAsync(
         string pacod, string mgcod, string lccod,
@@ -477,7 +673,15 @@ public class ErpService
                 new { Pa = pacod, Mg = mgcod, Lc = lccod }) ?? 0m;
 
             var delta = newQty - current;
-            if (delta == 0m) return (true, $"{pacod}: giacenza già a {newQty}");
+
+            // Quantità confermata: nessun movimento, ma l'abbinamento è stato verificato.
+            if (delta == 0m)
+            {
+                var stamped = await StampLocationVerifiedAsync(db, pacod, mgcod, lccod, operatorCode);
+                return (true, stamped
+                    ? $"{pacod}: giacenza confermata a {newQty} — verifica registrata"
+                    : $"{pacod}: giacenza confermata a {newQty} — abbinamento {mgcod}/{lccod} non presente in L_MLPA, verifica non registrata");
+            }
 
             var cmcod = delta > 0 ? "REP" : "REN";
             var refCode = $"WMS-RTT-{DateTime.Now:yyyyMMddHHmmss}";
@@ -487,13 +691,47 @@ public class ErpService
             if (idMov <= 0)
                 return (false, $"{pacod}: rettifica {cmcod} fallita (id={idMov} — causale REP/REN valida?)");
 
-            return (true, $"{cmcod} #{idMov}: {current} → {newQty} (delta {(delta > 0 ? "+" : "")}{delta})");
+            var msg = $"{cmcod} #{idMov}: {current} → {newQty} (delta {(delta > 0 ? "+" : "")}{delta})";
+
+            // Lo stamp segue il movimento: TRD_InsertMov può aver creato l'abbinamento.
+            // Un errore qui non annulla la rettifica, che è già registrata.
+            try
+            {
+                await StampLocationVerifiedAsync(db, pacod, mgcod, lccod, operatorCode);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Stamp verifica L_MLPA fallito dopo {CmCod} #{IdMov} per {Pacod} {Mg}/{Lc}",
+                    cmcod, idMov, pacod, mgcod, lccod);
+                msg += " — verifica non registrata";
+            }
+
+            return (true, msg);
         }
         catch (Exception ex)
         {
             _log.LogError(ex, "ErpService.ExecuteAdjustmentAsync fallito per {Pacod}", pacod);
             throw;
         }
+    }
+
+    /// <summary>
+    /// Marca l'abbinamento articolo/locazione come verificato in L_MLPA
+    /// (X_VerifiedUser = OPCOD operatore, X_VerifiedDate = adesso).
+    /// Scrive solo le due colonne custom: TRG_ON_UPDATE_MLPA non tocca LASTUPDATE,
+    /// che resta il timestamp dell'ultima variazione di quantità.
+    /// Ritorna false se l'abbinamento non esiste (nessuna riga aggiornata).
+    /// </summary>
+    private static async Task<bool> StampLocationVerifiedAsync(
+        SqlConnection db, string pacod, string mgcod, string lccod, string operatorCode)
+    {
+        var rows = await db.ExecuteAsync(
+            @"UPDATE dbo.L_MLPA
+                 SET X_VerifiedUser = @Op,
+                     X_VerifiedDate = GETDATE()
+               WHERE PACOD = @Pa AND MGCOD = @Mg AND LCCOD = @Lc",
+            new { Pa = pacod, Mg = mgcod, Lc = lccod, Op = operatorCode });
+        return rows > 0;
     }
 
     // ─── Nodo dispositivo (A_NOD) ────────────────────────────────────────────
@@ -1014,8 +1252,9 @@ public class ErpService
         {
             using var db = Open();
             // LCSTO = Stato Locazione, NOT NULL — 9 = attiva/normale (default Mecmar)
+            // LCDED = flag dedicata, NOT NULL — 'Y' = attiva (default Mecmar)
             await db.ExecuteAsync(
-                "INSERT INTO dbo.A_LOC (MGCOD, LCCOD, LCSTO) VALUES (@Mg, @Lc, 9)",
+                "INSERT INTO dbo.A_LOC (MGCOD, LCCOD, LCSTO, LCDED) VALUES (@Mg, @Lc, 9, 'Y')",
                 new { Mg = mgCod, Lc = lcCod.Trim().ToUpper() });
         }
         catch (Exception ex) { _log.LogError(ex, "CreateLocationAsync {Mg}/{Lc}", mgCod, lcCod); throw; }
@@ -1387,6 +1626,7 @@ public class ErpService
         public string? OPCOD { get; set; }
         public string? OPDSC { get; set; }
         public string? OPPSW { get; set; }
+        public string? OPPWR { get; set; }
         public string? GRCOD { get; set; }
     }
 

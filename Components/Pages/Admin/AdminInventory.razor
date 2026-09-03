@@ -45,7 +45,7 @@ else
             <MudTd>@context.Zone</MudTd>
             <MudTd>@context.StartedAt.ToString("dd/MM/yy HH:mm")</MudTd>
             <MudTd>@(context.ClosedAt?.ToString("dd/MM/yy HH:mm") ?? "—")</MudTd>
-            <MudTd>@context.TotalItems (@context.AppliedItems app.)</MudTd>
+            <MudTd>@context.TotalItems (@context.AppliedItems proc.)</MudTd>
             <MudTd>@(context.TotalQty?.ToString("N2") ?? "—")</MudTd>
             <MudTd>
                 @if (context.IsClosed)

@@ -21,6 +21,13 @@ public class AcceptanceOptions
     public string LoadCausal { get; set; } = "CMI";
 
     /// <summary>
+    /// IDNTF da usare per le notifiche S_NTF sulle anomalie di accettazione
+    /// (quantità sotto/sopra atteso, merce in NC). 0 = notifiche disabilitate.
+    /// Vedere catalogo A_NTF sul DB ERP per i valori disponibili.
+    /// </summary>
+    public int AnomalyNotificationId { get; set; } = 101;
+
+    /// <summary>
     /// Regole ordinate per selezione automatica del report etichetta.
     /// La prima regola che fa match vince; usare Field="*" / Pattern="*" come fallback finale.
     /// </summary>

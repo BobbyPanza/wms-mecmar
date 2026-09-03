@@ -213,11 +213,18 @@ else if (_activeCount is null && _extraCode is null)
         var counted    = _session.Counts.Count(c => c.IsCounted);
         var uncounted  = _session.Counts.Count(c => !c.IsCounted);
         var withDelta  = _session.Counts.Count(c => c.IsCounted && c.Delta != 0 && !c.Applied);
+        var confirmedN = _session.Counts.Count(c => c.IsCounted && c.Delta == 0 && !c.Applied);
 
         @if (withDelta > 0)
         {
             <MudAlert Severity="Severity.Warning" Class="mt-2">
                 @withDelta rettifica/e verranno inviate all'ERP (SINV/CINV).
+            </MudAlert>
+        }
+        @if (confirmedN > 0)
+        {
+            <MudAlert Severity="Severity.Info" Class="mt-1">
+                @confirmedN riga/he confermata/e senza differenze — verrà registrata la verifica.
             </MudAlert>
         }
         @if (uncounted > 0)
@@ -610,8 +617,12 @@ else if (_activeCount is not null)
         _applying = true;
 
         var sessionRef = $"INV-{_session.Id:N}"[..12];
-        var toApply    = _session.Counts.Where(c => c.IsCounted && c.Delta != 0 && !c.Applied).ToList();
+        // Anche le righe con delta 0 vanno inviate: non generano movimento ma
+        // registrano la verifica dell'abbinamento su L_MLPA (X_VerifiedUser/Date).
+        var toApply    = _session.Counts.Where(c => c.IsCounted && !c.Applied).ToList();
         var errors     = new List<string>();
+        var adjusted   = 0;   // righe con movimento SINV/CINV
+        var confirmed  = 0;   // righe confermate, sola verifica
 
         try
         {
@@ -628,6 +639,7 @@ else if (_activeCount is not null)
                         if (ok)
                         {
                             count.Applied = true;
+                            if (count.Delta != 0) adjusted++; else confirmed++;
                             if (Logic.IsConfigured)
                                 try { await Logic.MarkCountAppliedAsync(count.Id); } catch { }
                         }
@@ -638,6 +650,7 @@ else if (_activeCount is not null)
                 else
                 {
                     count.Applied = true;
+                    if (count.Delta != 0) adjusted++; else confirmed++;
                 }
             }
 
@@ -650,10 +663,10 @@ else if (_activeCount is not null)
                 if (Logic.IsConfigured)
                     try { await Logic.CloseInventorySessionAsync(_session.Id); } catch { }
 
-                var applied = toApply.Count;
                 var ignored = _session.Counts.Count(c => !c.IsCounted);
                 Snackbar.Add(
-                    $"Inventario chiuso — {applied} rettifiche applicate, {ignored} righe ignorate",
+                    $"Inventario chiuso — {adjusted} rettifiche applicate, " +
+                    $"{confirmed} righe confermate, {ignored} righe ignorate",
                     Severity.Success);
                 _session = null;
             }

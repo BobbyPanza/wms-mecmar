@@ -30,6 +30,8 @@ Repo separato da HAMMErp — non mescolare codice o dipendenze.
 - `MOSTP` in S_MOV = @movementDate o CURRENT_TIMESTAMP — **DTDOC non viene scritto** dalla SP
 - Causali: `SMI+CMI` (spostamento: 2 chiamate), `SCAR` (prelievo produzione), `SINV/CINV` (inventario), `REP/REN` (rettifiche)
 - Colonna famiglia articoli: `FMCOD` (non `PAFAM`) — vedi FactoryMecmar_ErpReference.md
+- Colonne custom aggiunte dal WMS (prefisso `X_`): `L_MLPA.X_VerifiedUser` / `X_VerifiedDate` — verifica abbinamento articolo/locazione in rettifica (vedi `sql/V010`)
+- `L_MLPA.LASTUPDATE` è gestito da `TRG_ON_UPDATE_MLPA` e cambia **solo** se cambiano QTLOC/QTMAX/QTMIN — non usarlo come "ultima volta che qualcuno ha guardato la riga"
 
 ### Logic — DB WMS proprio (lettura/scrittura)
 - Connection string: `ConnectionStrings:LogicDatabase` → `Server=localhost;Database=Logic;…`

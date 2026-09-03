@@ -1,4 +1,5 @@
 using Dapper;
+using Microsoft.Extensions.Options;
 using WMS.Models;
 
 namespace WMS.Services;
@@ -11,12 +12,16 @@ public class PickListService
 {
     private readonly LogicService _logic;
     private readonly ErpService   _erp;
+    private readonly PickListOptions _opts;
     private readonly ILogger<PickListService> _log;
 
-    public PickListService(LogicService logic, ErpService erp, ILogger<PickListService> log)
+    public PickListService(LogicService logic, ErpService erp,
+                           IOptions<PickListOptions> opts,
+                           ILogger<PickListService> log)
     {
         _logic = logic;
         _erp   = erp;
+        _opts  = opts.Value;
         _log   = log;
     }
 
@@ -145,8 +150,30 @@ public class PickListService
     public Task CancelStagedPicksAsync(Guid listId)
         => _logic.CancelStagedPicksForListAsync(listId);
 
-    public Task ClosePickListAsync(Guid listId)
-        => _logic.ClosePickListAsync(listId);
+    public async Task ClosePickListAsync(Guid listId,
+                                         PickListHeaderDto header,
+                                         List<PickListRowDto> rows,
+                                         string opCode)
+    {
+        await SendMissingNotificationAsync(header, rows, opCode);
+        await _logic.ClosePickListAsync(listId);
+    }
+
+    private async Task SendMissingNotificationAsync(
+        PickListHeaderDto header, List<PickListRowDto> rows, string opCode)
+    {
+        if (_opts.MissingNotificationId == 0) return;
+
+        var sb = new System.Text.StringBuilder();
+        foreach (var row in rows.Where(r => r.IsMissing))
+            sb.AppendLine($"- {row.ArticleCode} {row.ArticleDesc}: MANCANTE (previsto {row.PlannedQty:G} {row.UoM})");
+
+        if (sb.Length == 0) return;
+
+        var text = $"Lista di prelievo {header.Code} - {header.Description}\n\n{sb}";
+        await _erp.CompGenerateNotifyAsync(_opts.MissingNotificationId, header.Code, text, opCode);
+        _log.LogInformation("Notifica mancanti inviata per lista {Code}", header.Code);
+    }
 
     /// <summary>
     /// Ritorna le info di versamento per tutte le bolle presenti nella lista.

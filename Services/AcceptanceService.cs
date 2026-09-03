@@ -96,13 +96,40 @@ public class AcceptanceService
 
     /// <summary>
     /// Chiude il documento aggiornando DTSO su A_DOT al valore "accettato" configurato.
+    /// Dopo la chiusura invia una notifica S_NTF (IDNTF=101) se ci sono anomalie:
+    /// quantità sotto/sovra o merce versata in locazione NC.
     /// </summary>
-    public async Task<(bool Ok, string Message)> CompleteDocAsync(int erpDocId)
+    public async Task<(bool Ok, string Message)> CompleteDocAsync(AcceptanceDocDto doc, string opCode)
     {
-        var ok = await _erp.CloseAcceptanceDocAsync(erpDocId, _opts.AcceptedStatus);
-        return ok
-            ? (true,  $"Documento chiuso (stato → {_opts.AcceptedStatus})")
-            : (false, "Aggiornamento stato documento fallito");
+        var ok = await _erp.CloseAcceptanceDocAsync(doc.ErpDocId, _opts.AcceptedStatus);
+        if (!ok) return (false, "Aggiornamento stato documento fallito");
+
+        await SendAnomalyNotificationAsync(doc, opCode);
+
+        return (true, $"Documento chiuso (stato → {_opts.AcceptedStatus})");
+    }
+
+    private async Task SendAnomalyNotificationAsync(AcceptanceDocDto doc, string opCode)
+    {
+        const string NcLocation = "NC";
+        var lines = new System.Text.StringBuilder();
+
+        foreach (var item in doc.Items)
+        {
+            if (item.AcceptedQty < item.ExpectedQty)
+                lines.AppendLine($"- {item.ArticleCode} {item.ArticleDesc}: atteso {item.ExpectedQty:G}, ricevuto {item.AcceptedQty:G} [MANCANTE]");
+            else if (item.AcceptedQty > item.ExpectedQty)
+                lines.AppendLine($"- {item.ArticleCode} {item.ArticleDesc}: atteso {item.ExpectedQty:G}, ricevuto {item.AcceptedQty:G} [ECCEDENZA]");
+
+            if (item.Versamenti.Any(v => v.LocationCode.Equals(NcLocation, StringComparison.OrdinalIgnoreCase)))
+                lines.AppendLine($"- {item.ArticleCode} {item.ArticleDesc}: parte della merce versata in locazione NC (non conforme)");
+        }
+
+        if (lines.Length == 0 || _opts.AnomalyNotificationId == 0) return;
+
+        var text = $"Documento {doc.DocumentRef} del {doc.DocumentDate:dd/MM/yyyy} - {doc.SupplierName}\n\n{lines}";
+        await _erp.CompGenerateNotifyAsync(_opts.AnomalyNotificationId, doc.DocumentRef, text, opCode);
+        _log.LogInformation("Notifica anomalie inviata per documento {DocRef}", doc.DocumentRef);
     }
 
     // ─── Locazione default ────────────────────────────────────────────────────
