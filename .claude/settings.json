@@ -14,7 +14,9 @@
       "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'TRG_ON_BEFORE_INSERT_SPP'\" -W 2>&1)",
       "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'InsertCMFEUsage'\" -W 2>&1)",
       "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'ManageCMFEEngagedQuantity'\" -W 2>&1)",
-      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q $query -y 0 2>&1)"
+      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q $query -y 0 2>&1)",
+      "Bash(git merge --no-ff feat/verifiche-locazioni -m ' *)",
+      "Bash(git merge *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\russo\\.claude\\projects\\c--dev-WMS\\memory"
