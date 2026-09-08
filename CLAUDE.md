@@ -10,6 +10,7 @@ Repo separato da HAMMErp — non mescolare codice o dipendenze.
 
 | File | Contenuto |
 |------|-----------|
+| [docs/CONFLUENCE_WMS_Mecmar.md](docs/CONFLUENCE_WMS_Mecmar.md) | **Documentazione completa** — parte operativa (manuale per transazione) + parte tecnica (architettura, modello dati, causali, config, deploy, debiti tecnici). Pubblicata su Confluence |
 | [docs/WMS.md](docs/WMS.md) | **Requisiti completi del sistema** — spec funzionali, flussi operativi, regole di business |
 | [docs/FactoryMecmar_ErpReference.md](docs/FactoryMecmar_ErpReference.md) | Schema tabelle ERP reali (A_PAR, A_LOC, L_MLPA, S_MOV, A_CMM, A_OPR, A_MAG) con campioni di dati |
 | [docs/ErpQuery_Checklist.md](docs/ErpQuery_Checklist.md) | Checklist query/viste/SP necessarie al WMS — da completare man mano |
@@ -30,6 +31,8 @@ Repo separato da HAMMErp — non mescolare codice o dipendenze.
 - `MOSTP` in S_MOV = @movementDate o CURRENT_TIMESTAMP — **DTDOC non viene scritto** dalla SP
 - Causali: `SMI+CMI` (spostamento: 2 chiamate), `SCAR` (prelievo produzione), `SINV/CINV` (inventario), `REP/REN` (rettifiche)
 - Colonna famiglia articoli: `FMCOD` (non `PAFAM`) — vedi FactoryMecmar_ErpReference.md
+- Colonne custom aggiunte dal WMS (prefisso `X_`): `L_MLPA.X_VerifiedUser` / `X_VerifiedDate` — verifica abbinamento articolo/locazione in rettifica (vedi `sql/V010`)
+- `L_MLPA.LASTUPDATE` è gestito da `TRG_ON_UPDATE_MLPA` e cambia **solo** se cambiano QTLOC/QTMAX/QTMIN — non usarlo come "ultima volta che qualcuno ha guardato la riga"
 
 ### Logic — DB WMS proprio (lettura/scrittura)
 - Connection string: `ConnectionStrings:LogicDatabase` → `Server=localhost;Database=Logic;…`
@@ -93,20 +96,31 @@ wwwroot/
 
 ## Transazioni
 
-| Pagina | Route | Stato |
-|--------|-------|-------|
-| Login | `/login` | ✅ mock |
-| Home | `/home` | ✅ mock |
-| Interrogazione unificata | `/query` | ✅ ERP |
-| Interrogazione Articolo | `/query/article` | ✅ mock (assorbita da unificata) |
-| Interrogazione Locazione | `/query/location` | ✅ mock (assorbita da unificata) |
-| Spostamento Semplice | `/move/simple` | ✅ ERP (TRD_InsertMov SMI+CMI) |
-| Spostamento Carrello | `/move/cart` | ✅ ERP + Logic DB |
-| Prelievo Produzione | `/pick/production` | ✅ mock |
-| Prelievo da Lista | `/pick/list` | ✅ mock (tabelle ERP da definire) |
-| Accettazione | `/acceptance` | ✅ mock (tabelle ERP da definire) |
-| Inventario | `/inventory` | ✅ ERP + Logic DB |
-| Rettifiche semplici | `/adjustments` | ✅ ERP (TRD_InsertMov REP/REN) |
+Le 8 voci del menu Home sono nell'ordine: query, adjustments, move/simple, move/cart,
+acceptance, inventory, pick/list, locations/manage (scorciatoie tastiera 1–8).
+
+| Pagina | Route | In Home | Stato |
+|--------|-------|---------|-------|
+| Login | `/login` | — | ✅ ERP (A_OPR, PIN opzionale) |
+| Home | `/home`, `/` | — | ✅ |
+| Interrogazione unificata | `/query` | 1 | ✅ ERP |
+| Rettifiche semplici | `/adjustments` | 2 | ✅ ERP (TRD_InsertMov REP/REN + stamp verifica) |
+| Spostamento Semplice | `/move/simple` | 3 | ✅ ERP (TRD_InsertMov SMI+CMI) |
+| Spostamento Carrello | `/move/cart` | 4 | ✅ ERP + Logic `WMS_Cart` |
+| Accettazione | `/acceptance` | 5 | ✅ ERP + Logic `WMS_AcceptanceLine`/`WMS_AcceptancePhoto` |
+| Inventario | `/inventory` | 6 | ✅ ERP (CINV/SINV + stamp verifica) + Logic `WMS_InvSession`/`WMS_InvCount` |
+| Prelievo da Lista | `/pick/list` | 7 | ✅ ERP (sessioni S_SES + SCAR/CAR) + Logic `WMS_PickList*` |
+| Gestione Locazioni | `/locations/manage` | 8 | ✅ ERP A_LOC + L_MLPA (nessun movimento) |
+| Prelievo Produzione | `/production/pick` | — | ✅ ERP — **orfana**, superata da `/pick/list` |
+| Interrogazione Articolo | `/query/article` | — | ⚠️ solo mock, assorbita da `/query` |
+| Interrogazione Locazione | `/query/location` | — | ⚠️ solo mock, assorbita da `/query` |
+| Configurazione stampa | `/config` | menu utente | ✅ Logic `WMS_PrintTemplate` |
+| Admin — inventari | `/admin/inventory` | — | ✅ Logic |
+| Admin — liste prelievo | `/admin/picklists` | — | ✅ ERP + Logic (crea lista multi-bolla) |
+| Admin — accettazioni | `/admin/acceptance` | — | ✅ Logic |
+| Admin — verifiche locazioni | `/admin/verifications` | — | ✅ ERP (L_MLPA.X_Verified*) |
+
+Gating admin: `Session.GroupCode` (da `A_OPR.GRCOD`) ∈ `Admin:AllowedGroups`.
 
 ---
 

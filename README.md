@@ -142,7 +142,11 @@ docs/                     Requisiti, reference ERP, checklist query
 | Accettazione | `/acceptance` | ERP + Logic | ✅ |
 | Inventario | `/inventory` | ERP + Logic | ✅ |
 | Rettifiche semplici | `/adjustments` | TRD_InsertMov REP/REN | ✅ |
-| Gestione Locazioni | `/location/manage` | ERP A_LOC + L_MLPA | ✅ |
+| Gestione Locazioni | `/locations/manage` | ERP A_LOC + L_MLPA | ✅ |
+| Configurazione stampa | `/config` | Logic WMS_PrintTemplate | ✅ |
+| Admin (inventari, liste, accettazioni, verifiche) | `/admin/*` | ERP + Logic | ✅ |
+
+📖 **Documentazione completa** (operativa + tecnica, per Confluence): [docs/CONFLUENCE_WMS_Mecmar.md](docs/CONFLUENCE_WMS_Mecmar.md)
 
 ---
 
@@ -152,7 +156,7 @@ Le liste sono persistite su Logic DB (`WMS_PickList` + `WMS_PickListRow`).
 
 **Flusso:**
 1. Operatore carica una bolla (`WMS_V_PickList` su ERP) → righe salvate su Logic
-2. Ogni prelievo fisico viene *staged* su `WMS_StagedPick` (resiliente a cali WiFi)
+2. Ogni prelievo fisico viene *staged* su `WMS_PickListPick` (`ExecutedAt` NULL = staged; resiliente a cali WiFi)
 3. Conferma batch: per ogni bolla apre sessione ERP, registra via `WMS_InsertPickLine`, chiude
 4. Opzionale: versamento produzione tramite `WMS_InsertVersamentoLine`
 

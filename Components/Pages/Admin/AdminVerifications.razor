@@ -1,0 +1,305 @@
+@page "/admin/verifications"
+@layout AdminLayout
+@inject SessionService Session
+@inject ErpService Erp
+@inject NavigationManager Nav
+@inject IConfiguration Config
+@inject ISnackbar Snackbar
+@implements IDisposable
+
+<PageTitle>Verifiche locazioni — Admin WMS</PageTitle>
+
+@if (!_authorized)
+{
+    <MudAlert Severity="Severity.Error">Accesso non autorizzato.</MudAlert>
+    return;
+}
+
+<MudText Typo="Typo.h5" Class="mb-1" Style="font-weight:700;">Verifiche abbinamento articolo / locazione</MudText>
+<MudText Typo="Typo.body2" Class="mb-4" Style="color:rgba(255,255,255,0.6);">
+    Ultima verifica registrata su L_MLPA da rettifica o inventario. Le righe mai verificate compaiono per prime.
+</MudText>
+
+@if (!Erp.IsConfigured)
+{
+    <MudAlert Severity="Severity.Warning">ERP non configurato — nessun dato disponibile.</MudAlert>
+    return;
+}
+
+@* ─── Filtri ─────────────────────────────────────────────────────────────── *@
+<MudPaper Class="pa-3 mb-3" Elevation="1">
+    <MudGrid Spacing="2">
+        <MudItem xs="12" sm="6" md="2">
+            <MudSelect T="string" Value="_warehouse" ValueChanged="OnWarehouseChanged" Label="Magazzino"
+                       Clearable="true" Dense="true" Margin="Margin.Dense">
+                @if (_warehouses.Count == 0)
+                {
+                    <MudSelectItem T="string" Value="@string.Empty" Disabled="true">
+                        (nessun magazzino letto dall'ERP)
+                    </MudSelectItem>
+                }
+                @foreach (var w in _warehouses)
+                {
+                    <MudSelectItem T="string" Value="@w.Code">@w.Code — @w.Description</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="2">
+            <MudTextField @bind-Value="_location" Label="Locazione (inizia per)"
+                          Placeholder="es. WI" Margin="Margin.Dense" Clearable="true" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudSelect T="string" Value="_family" ValueChanged="OnFamilyChanged" Label="Famiglia merceologica"
+                       Clearable="true" Dense="true" Margin="Margin.Dense">
+                @if (_families.Count == 0)
+                {
+                    <MudSelectItem T="string" Value="@string.Empty" Disabled="true">
+                        (nessuna famiglia letta dall'ERP)
+                    </MudSelectItem>
+                }
+                @foreach (var f in _families)
+                {
+                    <MudSelectItem T="string" Value="@f.Code">@f.Code — @f.Description</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="2">
+            <MudDatePicker @bind-Date="_from" Label="Verificata dal"
+                           DateFormat="dd/MM/yyyy" Margin="Margin.Dense" Clearable="true" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="2">
+            <MudDatePicker @bind-Date="_to" Label="Verificata al"
+                           DateFormat="dd/MM/yyyy" Margin="Margin.Dense" Clearable="true" />
+        </MudItem>
+        <MudItem xs="12" md="1" Class="d-flex align-center">
+            <MudSwitch T="bool" Value="_onlyNever" ValueChanged="OnOnlyNeverChanged"
+                       Color="Color.Primary" Label="Mai verif." />
+        </MudItem>
+    </MudGrid>
+
+    <div class="d-flex align-center mt-2" style="gap:8px;">
+        <MudButton Variant="Variant.Filled" Color="Color.Primary"
+                   StartIcon="@Icons.Material.Filled.FilterAlt" OnClick="ApplyFilters">
+            APPLICA
+        </MudButton>
+        <MudButton Variant="Variant.Outlined" Color="Color.Default"
+                   StartIcon="@Icons.Material.Filled.Clear" OnClick="ClearFilters">
+            AZZERA
+        </MudButton>
+        <MudSpacer />
+        @if (_total >= 0)
+        {
+            <MudText Typo="Typo.body2" Style="color:rgba(255,255,255,0.7);">
+                @_total.ToString("N0") abbinamenti
+            </MudText>
+        }
+    </div>
+
+    @if (_onlyNever && (_from is not null || _to is not null))
+    {
+        <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+            Con "Mai verif." attivo il filtro sulle date non ha effetto: una riga mai verificata non ha data.
+        </MudAlert>
+    }
+</MudPaper>
+
+@* ─── Tabella ────────────────────────────────────────────────────────────── *@
+<MudTable @ref="_table" T="LocationVerificationRow" ServerData="LoadServerData"
+          Dense="true" Hover="true" Striped="true" Bordered="false">
+    <HeaderContent>
+        <MudTh><MudTableSortLabel T="LocationVerificationRow" SortLabel="ArticleCode">Articolo</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel T="LocationVerificationRow" SortLabel="ArticleDesc">Descrizione</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel T="LocationVerificationRow" SortLabel="FamilyCode">Famiglia</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel T="LocationVerificationRow" SortLabel="WarehouseCode">Mag.</MudTableSortLabel></MudTh>
+        <MudTh><MudTableSortLabel T="LocationVerificationRow" SortLabel="LocationCode">Locazione</MudTableSortLabel></MudTh>
+        <MudTh Style="text-align:right;"><MudTableSortLabel T="LocationVerificationRow" SortLabel="Quantity">Qtà</MudTableSortLabel></MudTh>
+        <MudTh>
+            <MudTableSortLabel T="LocationVerificationRow" SortLabel="VerifiedDate"
+                               InitialDirection="SortDirection.Ascending">Ultima verifica</MudTableSortLabel>
+        </MudTh>
+        <MudTh><MudTableSortLabel T="LocationVerificationRow" SortLabel="VerifiedUser">Verificata da</MudTableSortLabel></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="Articolo">
+            @context.ArticleCode
+            @if (context.IsMainLocation)
+            {
+                <MudIcon Icon="@Icons.Material.Filled.Star" Size="Size.Small"
+                         Style="color:#ffc200;vertical-align:middle;margin-left:4px;" />
+            }
+        </MudTd>
+        <MudTd DataLabel="Descrizione">@context.ArticleDesc</MudTd>
+        <MudTd DataLabel="Famiglia">
+            <MudTooltip Text="@context.FamilyDesc">@context.FamilyCode</MudTooltip>
+        </MudTd>
+        <MudTd DataLabel="Mag.">@context.WarehouseCode</MudTd>
+        <MudTd DataLabel="Locazione">@context.LocationCode</MudTd>
+        <MudTd DataLabel="Qtà" Style="text-align:right;">@context.Quantity.ToString("0.###")</MudTd>
+        <MudTd DataLabel="Ultima verifica">
+            @if (context.VerifiedDate is null)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Error">mai</MudChip>
+            }
+            else
+            {
+                <span>@context.VerifiedDate.Value.ToString("dd/MM/yy HH:mm")</span>
+                <MudChip T="string" Size="Size.Small" Color="@AgeColor(context.DaysSinceVerified!.Value)">
+                    @context.DaysSinceVerified g
+                </MudChip>
+            }
+        </MudTd>
+        <MudTd DataLabel="Verificata da">
+            @if (string.IsNullOrEmpty(context.VerifiedUser))
+            {
+                <span style="color:rgba(255,255,255,0.4);">—</span>
+            }
+            else
+            {
+                <MudTooltip Text="@context.VerifiedUser">@(context.VerifiedUserName ?? context.VerifiedUser)</MudTooltip>
+            }
+        </MudTd>
+    </RowTemplate>
+    <NoRecordsContent>
+        <MudText Typo="Typo.body2">Nessun abbinamento con questi filtri.</MudText>
+    </NoRecordsContent>
+    <LoadingContent>
+        <MudText Typo="Typo.body2">Caricamento…</MudText>
+    </LoadingContent>
+    <PagerContent>
+        <MudTablePager PageSizeOptions="new int[]{25,50,100,250}" />
+    </PagerContent>
+</MudTable>
+
+@code {
+    private MudTable<LocationVerificationRow>? _table;
+
+    private List<WarehouseDto> _warehouses = [];
+    private List<FamilyDto>    _families   = [];
+
+    private string?   _warehouse;
+    private string?   _location;
+    private string?   _family;
+    private DateTime? _from;
+    private DateTime? _to;
+    private bool      _onlyNever;
+
+    private int  _total = -1;
+    private bool _authorized;
+    private bool _initialized;
+
+    protected override void OnInitialized()
+    {
+        Session.OnChange += OnSessionChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await CheckAndInitAsync();
+    }
+
+    private async void OnSessionChanged() => await CheckAndInitAsync();
+
+    private async Task CheckAndInitAsync()
+    {
+        if (_initialized) return;
+
+        var allowed = Config.GetSection("Admin:AllowedGroups").Get<string[]>() ?? [];
+        _authorized = allowed.Contains(Session.GroupCode, StringComparer.OrdinalIgnoreCase);
+        if (!_authorized) { await InvokeAsync(StateHasChanged); return; }
+
+        if (Erp.IsConfigured)
+        {
+            try
+            {
+                _warehouses = await Erp.GetWarehousesAsync();
+                _families   = await Erp.GetFamiliesAsync();
+            }
+            catch (Exception ex)
+            {
+                Snackbar.Add($"Errore caricamento filtri: {ex.Message}", Severity.Error);
+            }
+        }
+
+        _initialized = true;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task<TableData<LocationVerificationRow>> LoadServerData(
+        TableState state, CancellationToken token)
+    {
+        if (!_authorized || !Erp.IsConfigured)
+            return new TableData<LocationVerificationRow> { Items = [], TotalItems = 0 };
+
+        try
+        {
+            var (rows, total) = await Erp.GetLocationVerificationsAsync(
+                warehouseCode:     _warehouse,
+                locationPrefix:    _location,
+                familyCode:        _family,
+                verifiedFrom:      _from,
+                verifiedTo:        _to,
+                onlyNeverVerified: _onlyNever,
+                sortColumn:        state.SortLabel,
+                sortDescending:    state.SortDirection == SortDirection.Descending,
+                page:              state.Page,
+                pageSize:          state.PageSize);
+
+            _total = total;
+            return new TableData<LocationVerificationRow> { Items = rows, TotalItems = total };
+        }
+        catch (Exception ex)
+        {
+            Snackbar.Add($"Errore caricamento: {ex.Message}", Severity.Error);
+            return new TableData<LocationVerificationRow> { Items = [], TotalItems = 0 };
+        }
+    }
+
+    // Le tendine e lo switch applicano subito; testo e date restano su APPLICA
+    // perché si compilano a più battute.
+    private async Task OnWarehouseChanged(string? value)
+    {
+        _warehouse = value;
+        await ApplyFilters();
+    }
+
+    private async Task OnFamilyChanged(string? value)
+    {
+        _family = value;
+        await ApplyFilters();
+    }
+
+    private async Task OnOnlyNeverChanged(bool value)
+    {
+        _onlyNever = value;
+        await ApplyFilters();
+    }
+
+    private async Task ApplyFilters()
+    {
+        if (_table is null) return;
+        // Cambiando filtro il totale cambia: restando sulla pagina corrente
+        // si finirebbe oltre la fine del risultato e la tabella sembrerebbe vuota.
+        if (_table.CurrentPage != 0) _table.NavigateTo(0);
+        await _table.ReloadServerData();
+    }
+
+    private async Task ClearFilters()
+    {
+        _warehouse = null;
+        _location  = null;
+        _family    = null;
+        _from      = null;
+        _to        = null;
+        _onlyNever = false;
+        await ApplyFilters();
+    }
+
+    private static Color AgeColor(int days) => days switch
+    {
+        > 365 => Color.Error,
+        > 180 => Color.Warning,
+        _     => Color.Success
+    };
+
+    public void Dispose() => Session.OnChange -= OnSessionChanged;
+}

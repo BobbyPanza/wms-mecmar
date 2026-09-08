@@ -31,7 +31,8 @@
                           Adornment="Adornment.Start"
                           AdornmentIcon="@Icons.Material.Filled.Badge"
                           Class="mb-4"
-                          AutoFocus="true" />
+                          AutoFocus="true"
+                          OnKeyDown="OnCodeKeyDown" />
         }
         else
         {
@@ -54,23 +55,26 @@
             </MudSelect>
         }
 
-        <MudTextField @bind-Value="_pin"
-                      Label="PIN"
-                      InputType="@(_showPin ? InputType.Text : InputType.Password)"
-                      Variant="Variant.Outlined"
-                      Adornment="Adornment.End"
-                      AdornmentIcon="@(_showPin ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
-                      OnAdornmentClick="() => _showPin = !_showPin"
-                      MaxLength="8"
-                      Class="mb-4"
-                      OnKeyDown="OnPinKeyDown" />
+        @if (_pinRequired)
+        {
+            <MudTextField @bind-Value="_pin"
+                          Label="PIN"
+                          InputType="@(_showPin ? InputType.Text : InputType.Password)"
+                          Variant="Variant.Outlined"
+                          Adornment="Adornment.End"
+                          AdornmentIcon="@(_showPin ? Icons.Material.Filled.VisibilityOff : Icons.Material.Filled.Visibility)"
+                          OnAdornmentClick="() => _showPin = !_showPin"
+                          MaxLength="8"
+                          Class="mb-4"
+                          OnKeyDown="OnPinKeyDown" />
+        }
 
         <MudButton Variant="Variant.Filled"
                    Color="Color.Primary"
                    FullWidth="true"
                    Size="Size.Large"
                    StartIcon="@Icons.Material.Filled.Login"
-                   OnClick="DoLogin"
+                   OnClick="@(_pinRequired ? DoLogin : CheckPinThenProceedAsync)"
                    Disabled="@_loading"
                    Style="height:52px;font-size:1rem;font-weight:700;">
             @if (_loading) { <MudProgressCircular Size="Size.Small" Indeterminate="true" /> }
@@ -88,6 +92,7 @@
     private string _pin = "";
     private bool _showPin;
     private bool _loading;
+    private bool _pinRequired = true;
 
     protected override void OnInitialized()
     {
@@ -100,14 +105,31 @@
             _selectedCode = MockWmsService.Operators[0].Code;
     }
 
+    private async Task OnCodeKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await CheckPinThenProceedAsync();
+    }
+
     private async Task OnPinKeyDown(KeyboardEventArgs e)
     {
         if (e.Key == "Enter") await DoLogin();
     }
 
+    // Controlla se il PIN è richiesto; se no, esegue subito il login.
+    private async Task CheckPinThenProceedAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_selectedCode)) return;
+        if (Erp.IsConfigured)
+            _pinRequired = await Erp.OperatorRequiresPinAsync(_selectedCode);
+        if (!_pinRequired)
+            await DoLogin();
+        // altrimenti l'utente deve compilare il PIN e cliccare ACCEDI
+    }
+
     private async Task DoLogin()
     {
-        if (string.IsNullOrEmpty(_selectedCode) || string.IsNullOrEmpty(_pin)) return;
+        if (string.IsNullOrEmpty(_selectedCode)) return;
+        if (_pinRequired && string.IsNullOrEmpty(_pin)) return;
         _loading = true;
 
         bool ok; string? name, role, groupCode;

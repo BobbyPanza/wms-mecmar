@@ -685,7 +685,7 @@ else
         {
             if (Svc.IsConfigured)
             {
-                var (ok, msg) = await Svc.CompleteDocAsync(_selectedDoc.ErpDocId);
+                var (ok, msg) = await Svc.CompleteDocAsync(_selectedDoc, Session.OperatorCode ?? "");
                 if (ok)
                 {
                     Snackbar.Add($"{_selectedDoc.DocumentRef}: {msg}", Severity.Success);

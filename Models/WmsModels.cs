@@ -464,6 +464,36 @@ public class AcceptancePhotoDto
     public DateTime UploadedAt   { get; set; }
 }
 
+// ─── Verifiche abbinamento articolo/locazione ────────────────────────────────
+
+public record FamilyDto(string Code, string Description);
+
+/// <summary>
+/// Riga di L_MLPA con lo stato di verifica (X_VerifiedUser / X_VerifiedDate),
+/// arricchita con famiglia merceologica e nome operatore.
+/// </summary>
+public class LocationVerificationRow
+{
+    public string    ArticleCode      { get; set; } = "";
+    public string    ArticleDesc      { get; set; } = "";
+    public string    FamilyCode       { get; set; } = "";
+    public string    FamilyDesc       { get; set; } = "";
+    public string    WarehouseCode    { get; set; } = "";
+    public string    LocationCode     { get; set; } = "";
+    public decimal   Quantity         { get; set; }
+    public bool      IsMainLocation   { get; set; }
+    public string?   VerifiedUser     { get; set; }
+    public string?   VerifiedUserName { get; set; }
+    public DateTime? VerifiedDate     { get; set; }
+
+    public bool IsVerified => VerifiedDate.HasValue;
+
+    /// <summary>Giorni dall'ultima verifica; null se mai verificato.</summary>
+    public int? DaysSinceVerified => VerifiedDate.HasValue
+        ? (int)(DateTime.Now.Date - VerifiedDate.Value.Date).TotalDays
+        : null;
+}
+
 // ─── Enums ───────────────────────────────────────────────────────────────────
 
 public enum PickStatus { Pending, Partial, Completed }

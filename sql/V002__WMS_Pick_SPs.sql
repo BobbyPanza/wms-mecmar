@@ -79,6 +79,18 @@ BEGIN
         VALUES
             (@IDSPP, @SESIE, @NOCOD, @PACOD, @PAQTP, @IDSES, @IDPAP, @SESIE, 1, 0);
 
+        -- Deriva COCOD e COTYP dalla bolla: L_ODLA → A_LOT → A_COM.
+        -- TRD_InsertMov NON ricava COCOD da OLCOD automaticamente; senza di esso
+        -- ComputeLotToBeCommittedQuantity / ComputeCmfeUsedQuantity non vedono
+        -- il prelievo e L_CMFE.PAQIM / A_LOT.LOQIM non vengono decrementati.
+        -- COTYP serve a ComputeLotOdlRequiredQuantity / ComputeLotRequiredQuantity.
+        DECLARE @COCOD CHAR(15), @COTYP CHAR(1);
+        SELECT TOP 1 @COCOD = com.COCOD, @COTYP = com.COTYP
+        FROM dbo.L_ODLA odla
+        JOIN dbo.A_LOT  lot ON lot.CONUM = odla.CONUM AND lot.LOCOD = odla.LOCOD
+        JOIN dbo.A_COM  com ON com.CONUM  = lot.CONUM
+        WHERE odla.OLCOD = @OLCOD;
+
         -- Movimento SCAR (scarico produzione), IDTBR=5, collegato a IDSPP
         -- @MGCOD/@LCCOD = '' → TRD_InsertMov usa la locazione principale dell'articolo
         DECLARE @RetVal INT;
@@ -91,7 +103,8 @@ BEGIN
             @iIDRIF       = @IDSPP,
             @iIDTBR       = 5,
             @operatorCode = @OPCOD,
-            @sOLCOD       = @OLCOD;
+            @sOLCOD       = @OLCOD,
+            @sCOCOD       = @COCOD;
 
         IF ISNULL(@RetVal, -1) <= 0
         BEGIN
@@ -102,6 +115,68 @@ BEGIN
 
         COMMIT;
         SET @IDMOV = @RetVal;
+
+        -- ── Aggiorna impegni live (approccio delta) ─────────────────────────
+        -- Formula: delta = qty * required_lot / required_bolla
+        -- I denominatori (required_bolla) sono scalari uguali per tutti i prelievi
+        -- della stessa OLCOD+PACOD: vengono calcolati una sola volta.
+        -- Non-fatal: il movimento è già committato, FixEngagedQuantity correggerà.
+        -- Floor a 0: PAQIM/LOQIM non possono scendere sotto zero.
+        BEGIN TRY
+            -- ─ L_CMFE.PAQIM ──────────────────────────────────────────────────
+            DECLARE @OdlReqCmfe NUMERIC(18,6);
+            SET @OdlReqCmfe = dbo.ComputeCmfeOdlRequiredQuantity(@OLCOD, @PACOD);
+
+            IF ISNULL(@OdlReqCmfe, 0) > 0
+                UPDATE t1
+                SET t1.PAQIM =
+                        CASE WHEN t1.PAQIM
+                                  - ROUND(@PAQTP
+                                          * dbo.ComputeCmfeRequiredQuantity(t1.CONUM, t1.FINUM, t1.LOCLP, t1.LOQDB)
+                                          / @OdlReqCmfe, 5) < 0
+                             THEN 0
+                             ELSE ROUND(t1.PAQIM
+                                        - @PAQTP
+                                          * dbo.ComputeCmfeRequiredQuantity(t1.CONUM, t1.FINUM, t1.LOCLP, t1.LOQDB)
+                                          / @OdlReqCmfe, 5)
+                        END,
+                    t1.SavedEngagedQuantity = 0
+                FROM dbo.L_CMFE  t1
+                JOIN dbo.A_LOT   t2 ON t1.LOCLP = t2.LOCOD AND t1.CONUM = t2.CONUM
+                JOIN dbo.L_ODLA  t3 ON t3.CONUM  = t2.CONUM AND t3.LOCOD = t2.LOCOD
+                WHERE t1.PACOD = @PACOD AND t1.PAQIM > 0 AND t3.OLCOD = @OLCOD
+                  AND ISNULL(t1.PANES, 'N') = 'N';
+
+            -- ─ A_LOT.LOQIM ───────────────────────────────────────────────────
+            DECLARE @OdlReqLot NUMERIC(18,6);
+            SET @OdlReqLot = dbo.ComputeLotOdlRequiredQuantity(@OLCOD, @PACOD, @COCOD, @COTYP);
+
+            IF ISNULL(@OdlReqLot, 0) > 0
+                UPDATE t1
+                SET t1.LOQIM =
+                        CASE WHEN t1.LOQIM
+                                  - ROUND(@PAQTP
+                                          * dbo.ComputeLotRequiredQuantity(t1.CONUM, t1.LOCOD, t1.LOCLM, t1.LOCLP,
+                                                                            t1.LOQDB, t1.LOPSP, @COCOD, @COTYP)
+                                          / @OdlReqLot, 5) < 0
+                             THEN 0
+                             ELSE ROUND(t1.LOQIM
+                                        - @PAQTP
+                                          * dbo.ComputeLotRequiredQuantity(t1.CONUM, t1.LOCOD, t1.LOCLM, t1.LOCLP,
+                                                                            t1.LOQDB, t1.LOPSP, @COCOD, @COTYP)
+                                          / @OdlReqLot, 5)
+                        END,
+                    t1.SavedEngagedQuantity = 0
+                FROM dbo.A_LOT  t1
+                JOIN dbo.A_LOT  t2 ON t1.LOCLP = t2.LOCOD AND t1.LOCOD <> t2.LOCOD AND t1.CONUM = t2.CONUM
+                JOIN dbo.L_ODLA t3 ON t3.CONUM  = t2.CONUM AND t3.LOCOD = t2.LOCOD
+                WHERE t1.PACOD = @PACOD AND t1.LOQIM > 0 AND t3.OLCOD = @OLCOD;
+        END TRY
+        BEGIN CATCH
+            DECLARE @EngErr NVARCHAR(500) = N'WMS_InsertPickLine: aggiornamento impegni fallito per '
+                + @PACOD + N'/' + @OLCOD + N': ' + ERROR_MESSAGE();
+            RAISERROR(@EngErr, 10, 1);
+        END CATCH
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0 ROLLBACK;

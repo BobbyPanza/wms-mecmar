@@ -437,7 +437,7 @@ else
                     Snackbar.Add($"{ok} versamento/i registrat{(ok == 1 ? "o" : "i")} su ERP", Severity.Success);
             }
 
-            await PickSvc.ClosePickListAsync(_list!.Id);
+            await PickSvc.ClosePickListAsync(_list!.Id, _list!, _rows, Session.OperatorCode ?? "");
             Snackbar.Add("Lista chiusa", Severity.Info);
             await CloseList();
         }
