@@ -7,7 +7,14 @@
       "Bash(sqlcmd -S localhost -U sa -P Intsupport1 -d FactoryMecmar -Q \" SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME LIKE '%CMM%' OR TABLE_NAME LIKE '%CAU%' OR TABLE_NAME LIKE '%causale%' ORDER BY TABLE_NAME\" -W echo \"=== A_CAU columns ===\" sqlcmd -S localhost -U sa -P Intsupport1 -d FactoryMecmar -Q \" SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME='A_CAU' ORDER BY ORDINAL_POSITION\" -W echo \"=== A_CMM sample data ===\" sqlcmd -S localhost -U sa -P Intsupport1 -d FactoryMecmar -Q \" SELECT TOP 30 * FROM A_CMM\" -W)",
       "Read(//c/dev/WMS/**)",
       "Bash(gh auth:*)",
-      "Bash(gh repo:*)"
+      "Bash(gh repo:*)",
+      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'WMS_InsertPickLine'\" -W 2>&1)",
+      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'TRG_ON_INSERT_MOV'\" -W 2>&1)",
+      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'TRG_ON_INSERT_SPP'\" -W 2>&1)",
+      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'TRG_ON_BEFORE_INSERT_SPP'\" -W 2>&1)",
+      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'InsertCMFEUsage'\" -W 2>&1)",
+      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q \"EXEC sp_helptext 'ManageCMFEEngagedQuantity'\" -W 2>&1)",
+      "PowerShell(sqlcmd -S localhost -d FactoryMecmar -U sa -P Intsupport1 -Q $query -y 0 2>&1)"
     ],
     "additionalDirectories": [
       "C:\\Users\\russo\\.claude\\projects\\c--dev-WMS\\memory"
